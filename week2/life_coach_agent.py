@@ -1,4 +1,5 @@
 import asyncio
+import base64
 
 import dotenv
 
@@ -10,6 +11,7 @@ from agents import (
     Runner,
     SQLiteSession,
     WebSearchTool,
+    ImageGenerationTool,
 )
 from openai import OpenAI
 
@@ -31,25 +33,48 @@ def search_user_files(query: str) -> str:
 
 if "life_coach_agent" not in st.session_state:
     st.session_state["life_coach_agent"] = Agent(
-        model="gpt-4o-mini",
+        model="gpt-4o",
         name="Life Coach Agent",
         instructions="""
-        ### Role
         당신은 유저를 격려하는 라이프 코치 에이전트입니다.
         
-        ### Response Procedure
-        1. 유저 목표를 참고하여 웹 검색을 수행하세요.
-        2. 유저 목표와 웹 검색 결과를 결합해 유저에게 개인화된 조언을 제공하세요.
-        3. 마지막에 참고한 유저 목표와 웹 검색 결과 출처를 명시하세요.
+        당신은 아래 동작을 수행해야 합니다:
+        
+        1. 유저의 질문에 대한 조언, 팁, 동기부여 콘텐츠를 검색합니다.
+        2. 유저의 질문과 관련된 파일이 있는지 검색합니다.
+        3. 유저의 질문에 대한 답변을 합니다.
+        
+        **주의사항**:
+        - 이미지를 생성해야 한다면 이미지를 생성해야 합니다.
+        - 이미지 생성 예시: "목표 기반 비전 보드", "맞춤 메시지가 담긴 동기부여 포스터", "진행 상황의 시각적 표현" 등
+        - 유저의 정보나 웹 검색 결과에 대한 출처를 간단히 명시해야 합니다.
         """,
         tools=[
             WebSearchTool(),
+            ImageGenerationTool(
+                tool_config={
+                    "type": "image_generation",
+                    "quality": "low",
+                    "output_format": "jpeg",
+                    "moderation": "low",
+                    "partial_images": 1,
+                }
+            ),
         ],
     )
 life_coach_agent = st.session_state["life_coach_agent"]
 
+class FixedSQLiteSession(SQLiteSession):
+    async def get_items(self, limit=None):
+        items = await super().get_items(limit=limit)
+        for item in items:
+            if isinstance(item, dict) and item.get("type") == "image_generation_call":
+                item.pop("action", None)
+        return items
+
+
 if "session" not in st.session_state:
-    st.session_state["session"] = SQLiteSession(
+    st.session_state["session"] = FixedSQLiteSession(
         "chat-history",
         "life_coach_agent.db",
     )
@@ -65,7 +90,12 @@ async def paint_history():
             continue
         with st.chat_message(message["role"]):
             if message["role"] == "user":
-                st.write(message["content"])
+                content = message["content"]
+                if isinstance(content, str) and "\n유저 파일 정보:" in content:
+                    content = content.split("\n유저 파일 정보:")[0].replace(
+                        "유저 질문: ", ""
+                    )
+                st.write(content)
             else:
                 if message.get("type") == "message":
                     st.write(message["content"][0]["text"])
@@ -76,6 +106,10 @@ async def paint_history():
             elif message["type"] == "file_search_call":
                 with st.chat_message("ai"):
                     st.write("📂 파일 검색...")
+            elif message["type"] == "image_generation_call":
+                image = base64.b64decode(message["result"])
+                with st.chat_message("ai"):
+                    st.image(image)
 
 
 asyncio.run(paint_history())
@@ -90,6 +124,14 @@ def update_status(status_container, event):
         "response.file_search_call.in_progress": ("📂 파일 검색 시작", "running"),
         "response.file_search_call.searching": ("📂 파일 검색 중...", "running"),
         "response.file_search_call.completed": ("✅ 파일 검색 완료!", "complete"),
+        "response.image_generation_call.in_progress": (
+            "🎨 이미지 생성 시작",
+            "running",
+        ),
+        "response.image_generation_call.completed": (
+            "✅ 이미지 생성 완료!",
+            "complete",
+        ),
     }
 
     if event in status_messages:
@@ -108,6 +150,7 @@ async def run_agent(message):
 
         status_container = st.status("🔎 웹 검색 중...", expanded=False)
         text_placeholder = st.empty()
+        image_placeholder = st.empty()
         response = ""
         stream = Runner.run_streamed(life_coach_agent, combined, session=session)
 
@@ -117,6 +160,9 @@ async def run_agent(message):
                 if event.data.type == "response.output_text.delta":
                     response += event.data.delta
                     text_placeholder.write(response)
+                elif event.data.type == "response.image_generation_call.partial_image":
+                    image = base64.b64decode(event.data.partial_image_b64)
+                    image_placeholder.image(image)
 
 
 prompt = st.chat_input(
