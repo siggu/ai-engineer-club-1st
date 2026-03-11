@@ -8,7 +8,14 @@ class UserAccountContext(BaseModel):
 
 
 class InputGuardrailOutput(BaseModel):
-    is_off_topic: bool
+    is_topic_off: bool
+    is_unacceptable_language: bool
+    reason: Optional[str] = None
+
+
+class OutputGuardrailOutput(BaseModel):
+    is_topic_off: bool
+    is_internal_info_leak: bool
     reason: Optional[str] = None
 
 

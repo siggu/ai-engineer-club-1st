@@ -3,40 +3,27 @@ from agents import (
     Agent,
     RunContextWrapper,
     input_guardrail,
+    output_guardrail,
     GuardrailFunctionOutput,
     Runner,
     handoff,
 )
 from agents.extensions.handoff_prompt import RECOMMENDED_PROMPT_PREFIX
 from agents.extensions import handoff_filters
-from models import HandoffData, InputGuardrailOutput, UserAccountContext
+from models import (
+    HandoffData,
+    InputGuardrailOutput,
+    OutputGuardrailOutput,
+    UserAccountContext,
+)
 
 from my_agents.menu_agent import menu_agent
 from my_agents.order_agent import order_agent
 from my_agents.reservation_agent import reservation_agent
+from my_agents.complaint_agent import complaint_agent
 
-input_guardrail_agent = Agent(
-    name="Input Guardrail Agent",
-    instructions="""
-    당신은 레스토랑 서비스에 들어오는 사용자 입력을 검사하는 가드레일 에이전트입니다.
-
-    당신의 역할은 사용자의 입력이 레스토랑 서비스(메뉴, 주문, 예약)와 관련된 내용인지 판단하는 것입니다.
-
-    판단 기준:
-    - 허용: 메뉴 조회, 음식 재료/알레르기 관련 질문, 주문 생성/조회/변경, 테이블 예약 관련 요청
-    - 차단: 레스토랑 서비스와 무관한 모든 요청 (예: 날씨, 정치, 코드 작성, 일반 잡담 등)
-
-    반드시 다음 JSON 형식으로만 응답하세요:
-    {
-        "is_topic_off": true 또는 false,
-        "reason": "판단 이유를 한 문장으로 작성"
-    }
-
-    - is_topic_off: true → 레스토랑 서비스와 무관한 요청이므로 차단
-    - is_topic_off: false → 레스토랑 서비스와 관련된 요청이므로 처리 가능
-    """,
-    output_type=InputGuardrailOutput,
-)
+from guardrails.input_guardrail import input_guardrail_agent
+from guardrails.output_guardrail import output_guardrail_agent
 
 
 @input_guardrail
@@ -70,7 +57,26 @@ async def off_topic_guardrail(
 
     return GuardrailFunctionOutput(
         output_info=result.final_output,
-        tripwire_triggered=result.final_output.is_off_topic,
+        tripwire_triggered=result.final_output.is_topic_off,
+    )
+
+
+@output_guardrail
+async def internal_info_guardrail(
+    wrapper: RunContextWrapper[UserAccountContext],
+    agent: Agent[UserAccountContext],
+    output: str,
+):
+    result = await Runner.run(
+        output_guardrail_agent,
+        output,
+        context=wrapper.context,
+    )
+
+    final: OutputGuardrailOutput = result.final_output
+    return GuardrailFunctionOutput(
+        output_info=final,
+        tripwire_triggered=final.is_topic_off or final.is_internal_info_leak,
     )
 
 
@@ -98,9 +104,14 @@ def dynamic_triage_agent_instructions(
     - 예약 에이전트는 테이블 예약 처리를 담당하는 에이전트입니다.
     - 예시 질문: "예약을 하고 싶어요", "오늘 저녁 7시에 4인 예약이 가능한가요?"
     
+    4. 불만 에이전트
+    - 불만 에이전트는 손님의 불만 사항을 듣고 해결책을 제시하는 에이전트입니다.
+    - 예시 질문: "음식이 너무 짜요", "서비스가 너무 느려요", "화장실이 너무 더러워요", "음식에서 머리카락이 나왔어요"
+    
+    
     분류 규칙은 다음과 같습니다:
     1. 손님의 질문이나 요청을 듣는다.
-    2. 손님의 질문이나 요청이 **메뉴/주문/예약** 관련 질문이 아니라면 "죄송하지만, 저는 메뉴, 주문, 예약 관련 질문에만 답변할 수 있습니다."라고 답변한다.
+    2. 손님의 질문이나 요청이 **메뉴/주문/예약/불만** 관련 질문이 아니라면 "죄송하지만, 저는 메뉴, 주문, 예약, 불만 관련 질문에만 답변할 수 있습니다."라고 답변한다.
     3. 에이전트를 연결할 때 에이전트 이름과 함께 연결시킨다.
     """
 
@@ -183,15 +194,27 @@ reservation_agent_description = """
 - 단체석, 프라이빗룸 등 특별한 좌석을 요청하는 경우
 """
 
+complaint_agent_description = """
+손님의 불만 사항을 듣고 해결책을 제시하는 에이전트입니다.
+다음과 같은 경우에 이 에이전트로 handoff하세요:
+- 음식이 너무 짜거나 싱거운 경우
+- 서비스가 느리거나 불친절한 경우
+- 매장 청결 상태가 좋지 않은 경우
+- 음식에서 이물질이 나왔을 때
+- 기타 레스토랑 이용 중 불편한 경험이 있었을 때
+"""
+
 
 triage_agent = Agent(
     name="Triage Agent",
     instructions=dynamic_triage_agent_instructions,
     input_guardrails=[off_topic_guardrail],
+    output_guardrails=[internal_info_guardrail],
     handoffs=[
         make_handoff(menu_agent, menu_agent_description),
         make_handoff(order_agent, order_agent_description),
         make_handoff(reservation_agent, reservation_agent_description),
+        make_handoff(complaint_agent, complaint_agent_description),
     ],
 )
 
@@ -199,12 +222,30 @@ triage_agent = Agent(
 menu_agent.handoffs = [
     make_handoff(order_agent, order_agent_description),
     make_handoff(reservation_agent, reservation_agent_description),
+    make_handoff(complaint_agent, complaint_agent_description),
 ]
 order_agent.handoffs = [
     make_handoff(menu_agent, menu_agent_description),
     make_handoff(reservation_agent, reservation_agent_description),
+    make_handoff(complaint_agent, complaint_agent_description),
 ]
 reservation_agent.handoffs = [
     make_handoff(menu_agent, menu_agent_description),
     make_handoff(order_agent, order_agent_description),
+    make_handoff(complaint_agent, complaint_agent_description),
 ]
+complaint_agent.handoffs = [
+    make_handoff(menu_agent, menu_agent_description),
+    make_handoff(order_agent, order_agent_description),
+    make_handoff(reservation_agent, reservation_agent_description),
+]
+
+# sub-agent에도 guardrail 적용 (triage_agent 생성 후 설정)
+menu_agent.input_guardrails = [off_topic_guardrail]
+order_agent.input_guardrails = [off_topic_guardrail]
+reservation_agent.input_guardrails = [off_topic_guardrail]
+complaint_agent.input_guardrails = [off_topic_guardrail]
+menu_agent.output_guardrails = [internal_info_guardrail]
+order_agent.output_guardrails = [internal_info_guardrail]
+reservation_agent.output_guardrails = [internal_info_guardrail]
+complaint_agent.output_guardrails = [internal_info_guardrail]

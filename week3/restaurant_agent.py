@@ -7,19 +7,22 @@ from my_agents.triage_agent import triage_agent
 from my_agents.menu_agent import menu_agent
 from my_agents.order_agent import order_agent
 from my_agents.reservation_agent import reservation_agent
+from my_agents.complaint_agent import complaint_agent
 
 import dotenv
+
 
 dotenv.load_dotenv()
 
 
-clinet = OpenAI()
+client = OpenAI()
 
 AGENTS = {
     "Triage Agent": triage_agent,
     "Menu Agent": menu_agent,
     "Order Agent": order_agent,
     "Reservation Agent": reservation_agent,
+    "Complaint Agent": complaint_agent,
 }
 
 user_account_context = UserAccountContext(
@@ -144,6 +147,7 @@ with st.sidebar:
             "Menu Agent": "📋",
             "Order Agent": "🛒",
             "Reservation Agent": "📅",
+            "Complaint Agent": "⚠️",
         }
 
         icon = agent_icons.get(agent_name, "🤖")
