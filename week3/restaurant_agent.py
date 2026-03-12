@@ -44,6 +44,9 @@ if "current_agent" not in st.session_state:
 if "handoff_info" not in st.session_state:
     st.session_state.handoff_info = None
 
+if "debug_events" not in st.session_state:
+    st.session_state.debug_events = []
+
 
 async def paint_history():
     messages = await session.get_items()
@@ -58,13 +61,15 @@ async def paint_history():
                     st.write(message["content"])
                 else:
                     if message["type"] == "message":
-                        st.write(message["content"][0]["text"].replace("$", "\$"))
+                        st.write(message["content"][0]["text"].replace("$", r"\$"))
 
 
 asyncio.run(paint_history())
 
 
 async def run_agent(message, is_handoff_continuation=False):
+    st.session_state.debug_events = []
+
     with st.chat_message("ai"):
         text_placeholder = st.empty()
         response = ""
@@ -79,15 +84,15 @@ async def run_agent(message, is_handoff_continuation=False):
             )
 
             async for event in stream.stream_events():
-                if event.type not in ["raw_response_event"]:
-                    print(f"DEBUG - Event type: {event.type}")
-
                 if event.type == "raw_response_event":
                     if event.data.type == "response.output_text.delta":
                         response += event.data.delta
-                        text_placeholder.write(response.replace("$", "\$"))
+                        text_placeholder.write(response.replace("$", r"\$"))
+                else:
+                    st.session_state.debug_events.append(event.type)
+                    print(f"DEBUG - Event type: {event.type}")
 
-                elif event.type == "agent_updated_stream_event":
+                if event.type == "agent_updated_stream_event":
                     new_agent = AGENTS.get(event.new_agent.name, event.new_agent)
                     if st.session_state.current_agent.name != new_agent.name:
                         st.session_state.current_agent = new_agent
@@ -96,6 +101,7 @@ async def run_agent(message, is_handoff_continuation=False):
                         response = ""
 
         except Exception as e:
+            st.session_state.debug_events.append(f"ERROR: {e}")
             st.error(f"Error: {e}")
 
 
@@ -174,6 +180,14 @@ with st.sidebar:
         st.write(f"**Issue:** {info.get('issue', 'N/A')}")
 
     st.write("---")
+
+    # 디버그용 이벤트 로그
+    with st.expander("🔍 Event Log (Debug)"):
+        if st.session_state.debug_events:
+            for i, evt in enumerate(st.session_state.debug_events, 1):
+                st.text(f"{i}. {evt}")
+        else:
+            st.text("(대화를 시작하면 이벤트가 표시됩니다)")
 
     # 디버그용 대화 기록 (토글)
     with st.expander("📜 Session History (Debug)"):
