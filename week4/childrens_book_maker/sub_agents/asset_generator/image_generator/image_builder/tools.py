@@ -30,7 +30,7 @@ async def generate_images(tool_context: ToolContext):
             continue
 
         image = client.images.generate(
-            model="gpt-image-1",
+            model="gpt-image-1.5",
             prompt=enhanced_prompt,
             n=1,
             quality="low",
