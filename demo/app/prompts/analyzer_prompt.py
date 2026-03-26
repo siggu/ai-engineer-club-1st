@@ -10,7 +10,11 @@ ANALYZER_PROMPT = """당신은 기술면접 전문 분석가입니다.
 [포트폴리오]
 {portfolio_parsed}
 
+[웹 검색 결과 (없으면 무시)]
+{search_results}
+
 [분석 지침]
+- 웹 검색 결과가 있으면 회사의 실제 기술 스택, 면접 트렌드를 분석에 반영하세요.
 - jd_parsed가 없으면 resume/portfolio 기반으로만 분석하세요.
 - resume_parsed, portfolio_parsed가 없으면 JD 기반으로만 분석하세요.
 - skill_match: JD 요구/우대 기술 중 resume·portfolio에서 확인된 것은 matched, 없는 것은 missing으로 분류하세요.
