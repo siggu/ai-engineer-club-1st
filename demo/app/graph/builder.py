@@ -2,6 +2,7 @@ import os
 import sqlite3
 from langgraph.graph import StateGraph, START, END
 from langgraph.checkpoint.sqlite import SqliteSaver
+from langgraph.types import RetryPolicy
 
 from .state import State
 from .nodes import (
@@ -15,18 +16,21 @@ from .edges import dispatch_parsing, route_analyzer, route_after_eval
 
 graph_builder = StateGraph(State)
 
+# 529(Overloaded) 포함 일시적 오류에 대한 지수 백오프 재시도 정책
+_llm_retry = RetryPolicy(max_attempts=5, initial_interval=2.0, backoff_factor=2.0)
+
 # ── 노드 추가 ────────────────────────────────────────────────────────
 graph_builder.add_node("read_files",    read_files)
-graph_builder.add_node("parse_doc",     parse_doc)
+graph_builder.add_node("parse_doc",     parse_doc,     retry=_llm_retry)
 graph_builder.add_node("merge_parsed",  merge_parsed)
-graph_builder.add_node("analyzer",      analyzer)
+graph_builder.add_node("analyzer",      analyzer,      retry=_llm_retry)
 graph_builder.add_node("tool_node",     tool_node)
-graph_builder.add_node("questioner",    questioner)
+graph_builder.add_node("questioner",    questioner,    retry=_llm_retry)
 graph_builder.add_node("interviewer",   interviewer)
-graph_builder.add_node("hint_provider", hint_provider)
-graph_builder.add_node("similar_q",     similar_q)
-graph_builder.add_node("followup_gen",  followup_gen)
-graph_builder.add_node("evaluator",     evaluator)
+graph_builder.add_node("hint_provider", hint_provider, retry=_llm_retry)
+graph_builder.add_node("similar_q",     similar_q,     retry=_llm_retry)
+graph_builder.add_node("followup_gen",  followup_gen,  retry=_llm_retry)
+graph_builder.add_node("evaluator",     evaluator,     retry=_llm_retry)
 graph_builder.add_node("report_gen",    report_gen)
 
 # ── 엣지 추가 ────────────────────────────────────────────────────────

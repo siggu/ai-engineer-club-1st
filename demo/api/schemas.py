@@ -11,6 +11,8 @@ class SessionResponse(BaseModel):
     session_id: str
     status: str
     question: dict[str, Any]
+    jd_summary: Optional[dict[str, Any]] = None
+    jd_raw: Optional[str] = None
 
 
 class AnswerResponse(BaseModel):

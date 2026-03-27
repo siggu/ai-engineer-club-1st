@@ -21,7 +21,7 @@ from .state import State
 
 load_dotenv()
 
-llm            = ChatAnthropic(model="claude-sonnet-4-6", max_tokens=4096)
+llm            = ChatAnthropic(model="claude-sonnet-4-6", max_tokens=4096, max_retries=5)
 tool_node      = ToolNode([web_search_tool])
 llm_with_tools = llm.bind_tools([web_search_tool])
 
