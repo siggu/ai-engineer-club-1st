@@ -1,6 +1,8 @@
 import json
+from functools import lru_cache
 from dotenv import load_dotenv
 from langchain_anthropic import ChatAnthropic
+from langchain_openai import ChatOpenAI
 from langgraph.prebuilt import ToolNode
 from langgraph.types import interrupt
 
@@ -21,9 +23,37 @@ from .state import State
 
 load_dotenv()
 
-llm            = ChatAnthropic(model="claude-sonnet-4-6", max_tokens=4096, max_retries=5)
-tool_node      = ToolNode([web_search_tool])
-llm_with_tools = llm.bind_tools([web_search_tool])
+tool_node = ToolNode([web_search_tool])
+
+_DEFAULT_MODELS = {
+    "anthropic": "claude-sonnet-4-6",
+    "openai":    "gpt-5",
+}
+
+
+@lru_cache(maxsize=16)
+def _make_llm(provider: str, model: str):
+    """provider+model 조합별로 LLM 인스턴스를 캐싱해 반환한다."""
+    if provider == "openai":
+        return ChatOpenAI(model=model, max_tokens=4096, max_retries=5)
+    return ChatAnthropic(model=model, max_tokens=4096, max_retries=5)
+
+
+@lru_cache(maxsize=16)
+def _make_llm_with_tools(provider: str, model: str):
+    return _make_llm(provider, model).bind_tools([web_search_tool])
+
+
+def _llm(cfg: dict):
+    provider = cfg.get("llm_provider", "anthropic")
+    model    = cfg.get("llm_model") or _DEFAULT_MODELS.get(provider, "claude-sonnet-4-6")
+    return _make_llm(provider, model)
+
+
+def _llm_tools(cfg: dict):
+    provider = cfg.get("llm_provider", "anthropic")
+    model    = cfg.get("llm_model") or _DEFAULT_MODELS.get(provider, "claude-sonnet-4-6")
+    return _make_llm_with_tools(provider, model)
 
 PROMPT_MAP = {
     "jd":        (JD_PARSE_PROMPT,        "jd_raw"),
@@ -50,9 +80,10 @@ def read_files(state: State) -> dict:
 def parse_doc(state: dict) -> dict:
     doc_type = state["doc_type"]
     raw      = state["raw"]
+    cfg      = state.get("interview_config", {})
     prompt, key = PROMPT_MAP[doc_type]
     try:
-        response = llm.invoke(prompt.format(**{key: raw}))
+        response = _llm(cfg).invoke(prompt.format(**{key: raw}))
         parsed = extract_json(response.content)
     except (json.JSONDecodeError, ValueError):
         parsed = {"주요업무": [], "자격요건": [], "우대사항": []} if doc_type == "jd" else {}
@@ -95,7 +126,7 @@ def analyzer(state: State) -> dict:
         else "없음"
     )
 
-    response = llm_with_tools.invoke(
+    response = _llm_tools(cfg).invoke(
         ANALYZER_PROMPT.format(
             jd_parsed=json.dumps(jd_parsed, ensure_ascii=False),
             resume_parsed=json.dumps(resume_parsed, ensure_ascii=False),
@@ -173,7 +204,7 @@ def questioner(state: State) -> dict:
 
     difficulty_instruction = DIFFICULTY_INSTRUCTIONS.get(difficulty, DIFFICULTY_INSTRUCTIONS["mixed"])
 
-    response = llm.invoke(
+    response = _llm(cfg).invoke(
         QUESTIONER_PROMPT.format(
             skill_match=json.dumps(skill_match, ensure_ascii=False),
             risk_points=json.dumps(risk_points, ensure_ascii=False),
@@ -187,7 +218,7 @@ def questioner(state: State) -> dict:
         )
     )
 
-    print("=== Claude 원본 응답 (앞 500자) ===")
+    print(f"=== LLM 원본 응답 (앞 500자) [{cfg.get('llm_provider','anthropic')}] ===")
     print(response.content[:500])
     print("===================================")
 
@@ -285,13 +316,14 @@ def interviewer(state: State) -> dict:
 # ── 코칭 노드 ────────────────────────────────────────────────────────
 
 def hint_provider(state: State) -> dict:
+    cfg              = state.get("interview_config", {})
     current_question = state.get("current_question", {})
     current_answer   = state.get("current_answer", "")
     current_score    = state.get("current_score", 0.0)
     question_pool    = state.get("question_pool", [])
     answered_count   = state.get("answered_count", 0)
 
-    response = llm.invoke(
+    response = _llm(cfg).invoke(
         HINT_PROVIDER_PROMPT.format(
             question=current_question.get("question", ""),
             intent=current_question.get("intent", ""),
@@ -327,6 +359,7 @@ def hint_provider(state: State) -> dict:
 
 
 def similar_q(state: State) -> dict:
+    cfg              = state.get("interview_config", {})
     current_question = state.get("current_question", {})
     current_answer   = state.get("current_answer", "")
     current_score    = state.get("current_score", 0.0)
@@ -334,7 +367,7 @@ def similar_q(state: State) -> dict:
     answered_count   = state.get("answered_count", 0)
     difficulty       = current_question.get("difficulty", "medium")
 
-    response = llm.invoke(
+    response = _llm(cfg).invoke(
         SIMILAR_Q_PROMPT.format(
             question=current_question.get("question", ""),
             related_keyword=current_question.get("related_keyword", ""),
@@ -367,6 +400,7 @@ def similar_q(state: State) -> dict:
 
 
 def followup_gen(state: State) -> dict:
+    cfg              = state.get("interview_config", {})
     current_question = state.get("current_question", {})
     current_answer   = state.get("current_answer", "")
     current_score    = state.get("current_score", 0.0)
@@ -376,7 +410,7 @@ def followup_gen(state: State) -> dict:
     difficulty_up = {"easy": "medium", "medium": "hard", "hard": "hard"}
     difficulty = difficulty_up.get(current_question.get("difficulty", "medium"), "hard")
 
-    response = llm.invoke(
+    response = _llm(cfg).invoke(
         FOLLOWUP_GEN_PROMPT.format(
             question=current_question.get("question", ""),
             related_keyword=current_question.get("related_keyword", ""),
@@ -411,6 +445,7 @@ def followup_gen(state: State) -> dict:
 # ── 채점 ─────────────────────────────────────────────────────────────
 
 def evaluator(state: State) -> dict:
+    cfg              = state.get("interview_config", {})
     current_question = state.get("current_question", {})
     current_answer   = state.get("current_answer", "")
     jd_keywords      = state.get("jd_keywords", [])
@@ -419,7 +454,7 @@ def evaluator(state: State) -> dict:
     session_history  = state.get("session_history", [])
     answered_count   = state.get("answered_count", 0)
 
-    response = llm.invoke(
+    response = _llm(cfg).invoke(
         EVALUATOR_PROMPT.format(
             question=current_question.get("question", ""),
             intent=current_question.get("intent", ""),

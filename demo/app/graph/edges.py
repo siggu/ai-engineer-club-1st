@@ -4,13 +4,14 @@ from .state import State
 
 
 def dispatch_parsing(state: State) -> list[Send]:
+    cfg   = state.get("interview_config", {})
     sends = []
     if state.get("jd_raw"):
-        sends.append(Send("parse_doc", {"doc_type": "jd",        "raw": state["jd_raw"]}))
+        sends.append(Send("parse_doc", {"doc_type": "jd",        "raw": state["jd_raw"],        "interview_config": cfg}))
     if state.get("resume_raw"):
-        sends.append(Send("parse_doc", {"doc_type": "resume",    "raw": state["resume_raw"]}))
+        sends.append(Send("parse_doc", {"doc_type": "resume",    "raw": state["resume_raw"],    "interview_config": cfg}))
     if state.get("portfolio_raw"):
-        sends.append(Send("parse_doc", {"doc_type": "portfolio", "raw": state["portfolio_raw"]}))
+        sends.append(Send("parse_doc", {"doc_type": "portfolio", "raw": state["portfolio_raw"], "interview_config": cfg}))
     return sends if sends else [Send("merge_parsed", {})]
 
 

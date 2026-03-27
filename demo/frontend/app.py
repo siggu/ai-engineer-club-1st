@@ -324,6 +324,35 @@ if st.session_state.stage == "setup":
 
         st.divider()
 
+        # ── AI 모델 선택 (form 밖 — 변경 즉시 rerun으로 모델 목록 갱신) ──
+        st.markdown("**🤖 AI 모델**")
+        _MODEL_OPTIONS = {
+            "anthropic": [
+                ("claude-sonnet-4-6",         "Claude Sonnet 4.6 (권장)"),
+                ("claude-haiku-4-5-20251001",  "Claude Haiku 4.5 (빠름)"),
+            ],
+            "openai": [
+                ("gpt-5",       "GPT-5 (권장)"),
+                ("gpt-5-mini",  "GPT-5 Mini (빠름·저렴)"),
+            ],
+        }
+        llm_provider = st.selectbox(
+            "AI 제공사",
+            options=["anthropic", "openai"],
+            format_func=lambda x: "Claude (Anthropic)" if x == "anthropic" else "GPT (OpenAI)",
+            key="sel_llm_provider",
+        )
+        llm_model = st.selectbox(
+            "모델",
+            options=[m for m, _ in _MODEL_OPTIONS[llm_provider]],
+            format_func=lambda x: next(
+                (label for m, label in _MODEL_OPTIONS[llm_provider] if m == x), x
+            ),
+            key="sel_llm_model",
+        )
+
+        st.divider()
+
         # ── 자기소개서 / 포트폴리오 + 설정 (form 안) ──────────────────
         with st.form("upload_form"):
 
@@ -421,6 +450,8 @@ if st.session_state.stage == "setup":
                 "coaching_mode": coaching_mode,
                 "question_type": question_type,
                 "difficulty": difficulty,
+                "llm_provider": llm_provider,
+                "llm_model": llm_model,
             }
             st.session_state.interview_config = interview_config
 

@@ -8,6 +8,7 @@ dependencies = [
     "grandalf==0.8",
     "ipywidgets>=8.1.8",
     "langchain-anthropic>=0.3.22",
+    "langchain-openai>=0.3.0",
     "langchain[openai]==0.3.27",
     "langgraph==0.6.6",
     "langgraph-checkpoint-sqlite==2.0.11",
