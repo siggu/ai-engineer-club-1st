@@ -1,3 +1,4 @@
+import json
 import os
 import streamlit as st
 import httpx
@@ -17,6 +18,8 @@ for key, default in {
     "current_question": None,
     "history": [],
     "report": None,
+    "interview_config": {},
+    "free_order_page": 0,  # free_order 모드 캐러셀 현재 페이지
 }.items():
     if key not in st.session_state:
         st.session_state[key] = default
@@ -25,70 +28,278 @@ for key, default in {
 # ── API 호출 헬퍼 ────────────────────────────────────────────────────
 
 
-def api_start_session(jd_file, resume_file, portfolio_file) -> dict:
-    files = {}
+def api_get_library() -> list[str]:
+    try:
+        with httpx.Client(timeout=5) as client:
+            resp = client.get(f"{API_URL}/library")
+        resp.raise_for_status()
+        return resp.json().get("files", [])
+    except Exception:
+        return []
+
+
+def api_delete_library_file(filename: str) -> None:
+    with httpx.Client(timeout=5) as client:
+        resp = client.delete(f"{API_URL}/library/{filename}")
+    resp.raise_for_status()
+
+
+def api_start_session(
+    jd_file,
+    resume_file,
+    portfolio_file,
+    interview_config: dict,
+    jd_library: str | None = None,
+    resume_library: str | None = None,
+    portfolio_library: str | None = None,
+) -> dict:
+    files: dict = {}
+    data: dict  = {"interview_config": json.dumps(interview_config)}
+
     if jd_file:
-        files["jd"] = (
-            jd_file.name,
-            jd_file.getvalue(),
-            jd_file.type or "application/octet-stream",
-        )
+        files["jd"] = (jd_file.name, jd_file.getvalue(), jd_file.type or "application/octet-stream")
+    elif jd_library:
+        data["jd_library"] = jd_library
+
     if resume_file:
-        files["resume"] = (
-            resume_file.name,
-            resume_file.getvalue(),
-            resume_file.type or "application/octet-stream",
-        )
+        files["resume"] = (resume_file.name, resume_file.getvalue(), resume_file.type or "application/octet-stream")
+    elif resume_library:
+        data["resume_library"] = resume_library
+
     if portfolio_file:
-        files["portfolio"] = (
-            portfolio_file.name,
-            portfolio_file.getvalue(),
-            portfolio_file.type or "application/octet-stream",
-        )
+        files["portfolio"] = (portfolio_file.name, portfolio_file.getvalue(), portfolio_file.type or "application/octet-stream")
+    elif portfolio_library:
+        data["portfolio_library"] = portfolio_library
 
     with httpx.Client(timeout=120) as client:
-        resp = client.post(f"{API_URL}/sessions", files=files)
+        resp = client.post(f"{API_URL}/sessions", files=files, data=data)
     resp.raise_for_status()
     return resp.json()
 
 
-def api_submit_answer(session_id: str, answer: str) -> dict:
+def api_submit_answer(
+    session_id: str,
+    answer: str,
+    selected_index: int | None = None,
+) -> dict:
+    body: dict = {"answer": answer}
+    if selected_index is not None:
+        body["selected_index"] = selected_index
+
     with httpx.Client(timeout=120) as client:
         resp = client.post(
             f"{API_URL}/sessions/{session_id}/answer",
-            json={"answer": answer},
+            json=body,
         )
     resp.raise_for_status()
     return resp.json()
 
 
-# ── 1단계: 파일 업로드 ───────────────────────────────────────────────
-if st.session_state.stage == "setup":
-    st.title("🎯 기술면접 도우미 에이전트")
-    st.markdown(
-        "채용공고 × 자기소개서 × 포트폴리오를 교차 분석해 **맞춤형 기술면접**을 진행합니다."
+# ── 질문 카드 렌더러 ─────────────────────────────────────────────────
+
+_TYPE_COLOR = {
+    "tech":       ("#1d4ed8", "#dbeafe"),
+    "experience": ("#15803d", "#dcfce7"),
+    "pressure":   ("#b91c1c", "#fee2e2"),
+}
+_TYPE_LABEL = {"tech": "기술", "experience": "경험", "pressure": "압박"}
+_DIFF_COLOR = {"easy": ("#166534", "#bbf7d0"), "medium": ("#92400e", "#fef3c7"), "hard": ("#7f1d1d", "#fecaca")}
+_DIFF_LABEL = {"easy": "쉬움", "medium": "보통", "hard": "어려움"}
+
+
+def _badge(text: str, fg: str, bg: str) -> str:
+    return (
+        f"<span style='background:{bg};color:{fg};padding:3px 11px;"
+        f"border-radius:20px;font-size:12px;font-weight:600;letter-spacing:.3px'>{text}</span>"
     )
-    st.divider()
+
+
+def _render_question_card(q_dict: dict, q_num: int, total: int) -> None:
+    q_type   = q_dict.get("type", "tech")
+    q_diff   = q_dict.get("difficulty", "medium")
+    question = q_dict.get("question", "")
+    is_retry = q_dict.get("is_retry", False)
+
+    type_fg, type_bg = _TYPE_COLOR.get(q_type) or ("#374151", "#f3f4f6")
+    diff_fg, diff_bg = _DIFF_COLOR.get(q_diff) or ("#374151", "#f3f4f6")
+    type_label = _TYPE_LABEL.get(q_type) or q_type.upper()
+    diff_label = _DIFF_LABEL.get(q_diff) or q_diff
+
+    retry_html = _badge("🔁 재도전", "#7c3aed", "#ede9fe") if is_retry else ""
+    badges = (
+        _badge(type_label, type_fg, type_bg)
+        + "&nbsp;"
+        + _badge(diff_label, diff_fg, diff_bg)
+        + ("&nbsp;" + retry_html if retry_html else "")
+    )
+
+    st.markdown(
+        f"""
+        <div style="
+            border:1px solid #e5e7eb;
+            border-radius:12px;
+            padding:22px 26px;
+            margin:12px 0 8px 0;
+            background:linear-gradient(135deg,#f9fafb 0%,#f3f4f6 100%);
+        ">
+            <div style="display:flex;align-items:center;gap:6px;margin-bottom:14px">
+                <span style="font-size:12px;color:#9ca3af;font-weight:500">Q{q_num}&nbsp;/&nbsp;{total}</span>
+                <span style="color:#d1d5db;margin:0 4px">|</span>
+                {badges}
+            </div>
+            <p style="font-size:17px;font-weight:600;line-height:1.7;margin:0;color:#111827">
+                {question}
+            </p>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    hint    = q_dict.get("hint", "")
+    missing = q_dict.get("missing_point", "")
+    if hint:
+        missing_html = (
+            f"<p style='margin:8px 0 0 0;color:#a16207;font-size:12px'>⚠️ 부족했던 점: {missing}</p>"
+            if missing else ""
+        )
+        st.markdown(
+            f"""
+            <div style="
+                border-left:4px solid #f59e0b;
+                background:#fffbeb;
+                border-radius:0 8px 8px 0;
+                padding:14px 18px;
+                margin:4px 0 12px 0;
+            ">
+                <p style="margin:0 0 4px 0;font-weight:700;color:#92400e;font-size:13px">💡 힌트</p>
+                <p style="margin:0;color:#78350f;font-size:14px;line-height:1.6">{hint}</p>
+                {missing_html}
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+
+
+# ── 1단계: 파일 업로드 + 설정 ────────────────────────────────────────
+if st.session_state.stage == "setup":
+
+    # 히어로 헤더
+    st.markdown(
+        """
+        <div style="text-align:center;padding:48px 0 32px 0">
+            <p style="font-size:48px;margin:0">🎯</p>
+            <h1 style="font-size:32px;font-weight:800;margin:8px 0 6px 0;color:#111827">
+                기술면접 도우미 에이전트
+            </h1>
+            <p style="color:#6b7280;font-size:15px;margin:0">
+                채용공고 × 자기소개서 × 포트폴리오를 교차 분석해 <strong>맞춤형 기술면접</strong>을 진행합니다
+            </p>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    # 라이브러리 파일 목록 (폼 밖에서 조회)
+    library_files = api_get_library()
+    _none = "— 선택 안 함 —"
+
+    # 라이브러리 관리
+    if library_files:
+        with st.expander(f"📁 저장된 파일 라이브러리  ({len(library_files)}개)", expanded=False):
+            for fname in library_files:
+                col_f, col_d = st.columns([10, 1])
+                col_f.markdown(
+                    f"<span style='font-size:13px;color:#374151'>📄 {fname}</span>",
+                    unsafe_allow_html=True,
+                )
+                if col_d.button("🗑", key=f"del_{fname}", help=f"{fname} 삭제"):
+                    try:
+                        api_delete_library_file(fname)
+                        st.toast(f"{fname} 삭제됨", icon="🗑")
+                        st.rerun()
+                    except Exception as e:
+                        st.error(str(e))
 
     with st.form("upload_form"):
+
+        # ── 파일 업로드 섹션 ─────────────────────────────────────────
+        st.markdown(
+            "<p style='font-size:14px;font-weight:700;color:#374151;margin:4px 0 12px 0'>"
+            "📂 문서 업로드</p>",
+            unsafe_allow_html=True,
+        )
         col1, col2, col3 = st.columns(3)
+
+        def _file_slot(col, icon: str, label: str, key_up: str, key_lib: str, required: bool = False):
+            req = "<span style='color:#ef4444;font-size:11px;margin-left:4px'>필수</span>" if required else ""
+            col.markdown(
+                f"<p style='font-size:13px;font-weight:600;color:#374151;margin:0 0 6px 0'>"
+                f"{icon} {label}{req}</p>",
+                unsafe_allow_html=True,
+            )
+            f = col.file_uploader(
+                "새 파일 업로드",
+                type=["pdf", "txt", "md"],
+                key=key_up,
+                label_visibility="collapsed",
+            )
+            lib = col.selectbox(
+                "라이브러리에서 선택",
+                options=[_none] + library_files,
+                key=key_lib,
+                disabled=bool(f),
+                label_visibility="collapsed" if f else "visible",
+            )
+            return f, lib
+
         with col1:
-            jd_file = st.file_uploader(
-                "📄 채용공고 (JD) **필수**",
-                type=["pdf", "txt", "md"],
-                help="지원할 회사의 채용공고 파일을 업로드하세요.",
-            )
+            jd_file, jd_library = _file_slot(col1, "📄", "채용공고 (JD)", "up_jd", "lib_jd", required=True)
         with col2:
-            resume_file = st.file_uploader(
-                "📝 자기소개서 (선택)",
-                type=["pdf", "txt", "md"],
-            )
+            resume_file, resume_library = _file_slot(col2, "📝", "자기소개서", "up_resume", "lib_resume")
         with col3:
-            portfolio_file = st.file_uploader(
-                "💼 포트폴리오 (선택)",
-                type=["pdf", "txt", "md"],
+            portfolio_file, portfolio_library = _file_slot(col3, "💼", "포트폴리오", "up_portfolio", "lib_portfolio")
+
+        st.markdown("<div style='margin-top:4px'></div>", unsafe_allow_html=True)
+        st.divider()
+
+        # ── 면접 설정 섹션 ───────────────────────────────────────────
+        st.markdown(
+            "<p style='font-size:14px;font-weight:700;color:#374151;margin:0 0 12px 0'>"
+            "⚙️ 면접 설정</p>",
+            unsafe_allow_html=True,
+        )
+        cfg1, cfg2, cfg3, cfg4, cfg5 = st.columns(5)
+
+        with cfg1:
+            interview_mode = st.selectbox(
+                "면접 방식",
+                options=["sequential", "free_order"],
+                format_func=lambda x: "순서대로" if x == "sequential" else "자유 선택",
+                help="자유 선택: 남은 질문 목록에서 직접 골라 답변합니다.",
+            )
+        with cfg2:
+            coaching_mode = st.selectbox(
+                "코칭 방식",
+                options=["full", "simple"],
+                format_func=lambda x: "힌트·심화 코칭" if x == "full" else "즉시 채점",
+                help="코칭: 점수에 따라 힌트·유사문제·심화질문을 제공합니다.",
+            )
+        with cfg3:
+            n_questions = st.slider("질문 수", min_value=5, max_value=20, value=10, step=1)
+        with cfg4:
+            question_type = st.selectbox(
+                "질문 유형",
+                options=["mixed", "tech", "experience", "pressure"],
+                format_func=lambda x: {"mixed": "혼합", "tech": "기술", "experience": "경험", "pressure": "압박"}[x],
+            )
+        with cfg5:
+            difficulty = st.selectbox(
+                "난이도",
+                options=["mixed", "easy", "medium", "hard"],
+                format_func=lambda x: {"mixed": "혼합", "easy": "쉬움", "medium": "보통", "hard": "어려움"}[x],
             )
 
+        st.markdown("<div style='margin-top:8px'></div>", unsafe_allow_html=True)
         submitted = st.form_submit_button(
             "면접 시작하기 →",
             type="primary",
@@ -96,12 +307,32 @@ if st.session_state.stage == "setup":
         )
 
     if submitted:
-        if not jd_file:
-            st.error("채용공고(JD)는 필수입니다.")
+        # 라이브러리 선택값 정리 (None 변환)
+        jd_lib      = None if jd_library      == _none else jd_library
+        resume_lib  = None if resume_library  == _none else resume_library
+        portf_lib   = None if portfolio_library == _none else portfolio_library
+
+        jd_ok = bool(jd_file or jd_lib)
+        if not jd_ok:
+            st.error("채용공고(JD)는 필수입니다. 새로 업로드하거나 라이브러리에서 선택해주세요.")
         else:
+            interview_config = {
+                "interview_mode": interview_mode,
+                "n_questions": n_questions,
+                "coaching_mode": coaching_mode,
+                "question_type": question_type,
+                "difficulty": difficulty,
+            }
+            st.session_state.interview_config = interview_config
+
             with st.spinner("문서를 분석하고 있습니다... (30~60초 소요)"):
                 try:
-                    result = api_start_session(jd_file, resume_file, portfolio_file)
+                    result = api_start_session(
+                        jd_file, resume_file, portfolio_file, interview_config,
+                        jd_library=jd_lib,
+                        resume_library=resume_lib,
+                        portfolio_library=portf_lib,
+                    )
                     st.session_state.session_id = result["session_id"]
                     st.session_state.current_question = result["question"]
                     st.session_state.stage = "interview"
@@ -117,82 +348,170 @@ elif st.session_state.stage == "interview":
     q = st.session_state.current_question
     history = st.session_state.history
 
-    q_num = q.get("question_number", 1)
-    total = q.get("total_questions", 10)
-
     # 헤더
     col_title, col_exit = st.columns([8, 1])
     with col_title:
         st.title("🎤 기술면접 진행 중")
     with col_exit:
         if st.button("종료", type="secondary"):
-            for key in ["stage", "session_id", "current_question", "history", "report"]:
+            for key in [
+                "stage",
+                "session_id",
+                "current_question",
+                "history",
+                "report",
+                "interview_config",
+            ]:
                 st.session_state.pop(key, None)
             st.rerun()
 
-    # 진행 상황
-    st.progress(q_num / total, text=f"**Q{q_num} / {total}**")
-    st.markdown(
-        f"<span style='background:#1e3a5f;padding:4px 10px;border-radius:12px;font-size:13px'>"
-        f"**{q.get('type', '').upper()}** &nbsp;|&nbsp; {q.get('difficulty', '')}</span>",
-        unsafe_allow_html=True,
-    )
-    st.markdown(f"### {q.get('question', '')}")
+    # ── free_order 모드 ──────────────────────────────────────────────
+    if q.get("mode") == "free_order":
+        answered_count = q.get("answered_count", 0)
+        total = q.get("total_questions", 10)
+        questions = q.get("questions", [])
 
-    # 힌트 (재출제 시)
-    if q.get("hint"):
-        st.info(f"💡 **힌트:** {q['hint']}")
-
-    st.divider()
-
-    # 답변 입력
-    with st.form("answer_form", clear_on_submit=True):
-        answer = st.text_area(
-            "답변을 입력하세요",
-            height=220,
-            placeholder="구체적인 경험과 기술적 근거를 포함해 답변해 주세요...",
-            label_visibility="collapsed",
-        )
-        submitted = st.form_submit_button(
-            "답변 제출 →",
-            type="primary",
-            use_container_width=True,
+        st.progress(
+            answered_count / max(total, 1),
+            text=f"**{answered_count} / {total} 완료**",
         )
 
-    if submitted:
-        if not answer.strip():
-            st.warning("답변을 입력해주세요.")
+        if not questions:
+            st.info("모든 질문에 답변했습니다.")
         else:
-            with st.spinner("채점 중..."):
-                try:
-                    result = api_submit_answer(
-                        st.session_state.session_id, answer.strip()
-                    )
+            # 페이지 인덱스 범위 보정
+            page = min(st.session_state.free_order_page, len(questions) - 1)
+            page = max(page, 0)
+            st.session_state.free_order_page = page
 
-                    st.session_state.history.append(
-                        {
-                            "q_number": q_num,
-                            "type": q.get("type", ""),
-                            "difficulty": q.get("difficulty", ""),
-                            "question": q.get("question", ""),
-                            "answer": answer.strip(),
-                        }
-                    )
+            cur_q = questions[page]
 
-                    if result["status"] == "in_progress":
-                        st.session_state.current_question = result["question"]
-                        st.rerun()
-                    else:
-                        st.session_state.report = result["report"]
-                        st.session_state.stage = "complete"
-                        st.rerun()
+            # 캐러셀 네비게이션
+            nav_left, nav_center, nav_right = st.columns([1, 6, 1])
+            with nav_left:
+                if st.button("◀", disabled=(page == 0), use_container_width=True):
+                    st.session_state.free_order_page -= 1
+                    st.rerun()
+            with nav_center:
+                st.markdown(
+                    f"<p style='text-align:center;color:#6b7280;font-size:13px;margin:6px 0'>"
+                    f"질문 {page + 1} / {len(questions)}</p>",
+                    unsafe_allow_html=True,
+                )
+            with nav_right:
+                if st.button(
+                    "▶", disabled=(page == len(questions) - 1), use_container_width=True
+                ):
+                    st.session_state.free_order_page += 1
+                    st.rerun()
 
-                except httpx.HTTPStatusError as e:
-                    st.error(f"서버 오류: {e.response.text}")
-                except Exception as e:
-                    st.error(f"오류 발생: {e}")
+            # 질문 카드
+            _render_question_card(cur_q, answered_count + 1, total)
 
-    # 이전 답변 목록
+            # 답변 입력 — key에 page를 포함해 페이지 이동 시 각 질문의 입력이 보존됨
+            answer_key = f"fo_answer_{page}"
+            st.text_area(
+                "답변을 입력하세요",
+                height=200,
+                placeholder="구체적인 경험과 기술적 근거를 포함해 답변해 주세요...",
+                label_visibility="collapsed",
+                key=answer_key,
+            )
+
+            if st.button("답변 제출 →", type="primary", use_container_width=True):
+                answer_val = st.session_state.get(answer_key, "").strip()
+                if not answer_val:
+                    st.warning("답변을 입력해주세요.")
+                else:
+                    with st.spinner("채점 중..."):
+                        try:
+                            result = api_submit_answer(
+                                st.session_state.session_id,
+                                answer_val,
+                                selected_index=cur_q["index"],
+                            )
+
+                            st.session_state.history.append(
+                                {
+                                    "q_number": answered_count + 1,
+                                    "type": cur_q.get("type", ""),
+                                    "difficulty": cur_q.get("difficulty", ""),
+                                    "question": cur_q.get("question", ""),
+                                    "answer": answer_val,
+                                }
+                            )
+                            st.session_state.free_order_page = 0  # 다음 라운드 초기화
+
+                            if result["status"] == "in_progress":
+                                st.session_state.current_question = result["question"]
+                                st.rerun()
+                            else:
+                                st.session_state.report = result["report"]
+                                st.session_state.stage = "complete"
+                                st.rerun()
+
+                        except httpx.HTTPStatusError as e:
+                            st.error(f"서버 오류: {e.response.text}")
+                        except Exception as e:
+                            st.error(f"오류 발생: {e}")
+
+    # ── sequential 모드 ──────────────────────────────────────────────
+    else:
+        q_num = q.get("question_number", 1)
+        total = q.get("total_questions", 10)
+
+        st.progress(q_num / total, text=f"**Q{q_num} / {total}**")
+
+        # 질문 카드
+        _render_question_card(q, q_num, total)
+
+        with st.form("answer_form", clear_on_submit=True):
+            answer = st.text_area(
+                "답변을 입력하세요",
+                height=220,
+                placeholder="구체적인 경험과 기술적 근거를 포함해 답변해 주세요...",
+                label_visibility="collapsed",
+            )
+            submitted = st.form_submit_button(
+                "답변 제출 →",
+                type="primary",
+                use_container_width=True,
+            )
+
+        if submitted:
+            if not answer.strip():
+                st.warning("답변을 입력해주세요.")
+            else:
+                with st.spinner("채점 중..."):
+                    try:
+                        result = api_submit_answer(
+                            st.session_state.session_id, answer.strip()
+                        )
+
+                        st.session_state.history.append(
+                            {
+                                "q_number": q_num,
+                                "type": q.get("type", ""),
+                                "difficulty": q.get("difficulty", ""),
+                                "question": q.get("question", ""),
+                                "answer": answer.strip(),
+                            }
+                        )
+
+                        if result["status"] == "in_progress":
+                            st.session_state.current_question = result["question"]
+                            st.rerun()
+                        else:
+                            st.session_state.report = result["report"]
+                            st.session_state.stage = "complete"
+                            st.rerun()
+
+                    except httpx.HTTPStatusError as e:
+                        st.error(f"서버 오류: {e.response.text}")
+                    except Exception as e:
+                        st.error(f"오류 발생: {e}")
+
+    # 이전 답변 목록 (공통)
     if history:
         with st.expander(f"이전 답변 보기 ({len(history)}개)", expanded=False):
             for h in reversed(history):
@@ -249,6 +568,13 @@ elif st.session_state.stage == "complete":
     st.divider()
 
     if st.button("새 면접 시작하기", type="primary", use_container_width=True):
-        for key in ["stage", "session_id", "current_question", "history", "report"]:
+        for key in [
+            "stage",
+            "session_id",
+            "current_question",
+            "history",
+            "report",
+            "interview_config",
+        ]:
             st.session_state.pop(key, None)
         st.rerun()

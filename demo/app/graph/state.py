@@ -39,3 +39,6 @@ class State(TypedDict):
     total_questions: int
     interview_complete: bool
     retry_flag: bool
+    interview_config: dict          # {"interview_mode": "sequential", "n_questions": 10, "coaching_mode": "full", "question_type": "mixed", "difficulty": "mixed"}
+    answered_indices: list[int]     # free_order 모드에서 답변 완료된 question_pool 인덱스
+    current_question_index: int     # free_order 모드에서 현재 선택된 인덱스

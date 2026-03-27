@@ -11,7 +11,7 @@ from .nodes import (
     hint_provider, similar_q, followup_gen,
     evaluator, report_gen,
 )
-from .edges import dispatch_parsing, route_analyzer, route_by_score, check_completion
+from .edges import dispatch_parsing, route_analyzer, route_after_eval
 
 graph_builder = StateGraph(State)
 
@@ -44,20 +44,28 @@ graph_builder.add_conditional_edges(
 graph_builder.add_edge("tool_node", "analyzer")
 
 # 면접 단계
+# interviewer → evaluator (항상): 답변 수집 후 즉시 채점
 graph_builder.add_edge("questioner",    "interviewer")
-graph_builder.add_edge("report_gen",    END)
+graph_builder.add_edge("interviewer",   "evaluator")
+
+# evaluator → route_after_eval: 완료/코칭/다음 문항 분기
+graph_builder.add_conditional_edges(
+    "evaluator", route_after_eval,
+    {
+        "done":     "report_gen",
+        "continue": "interviewer",
+        "hint":     "hint_provider",
+        "similar":  "similar_q",
+        "followup": "followup_gen",
+    },
+)
+
+# 코칭 노드 → 다시 면접
 graph_builder.add_edge("hint_provider", "interviewer")
 graph_builder.add_edge("similar_q",     "interviewer")
 graph_builder.add_edge("followup_gen",  "interviewer")
 
-graph_builder.add_conditional_edges(
-    "interviewer", route_by_score,
-    {"hint": "hint_provider", "similar": "similar_q", "followup": "followup_gen"},
-)
-graph_builder.add_conditional_edges(
-    "evaluator", check_completion,
-    {"done": "report_gen", "continue": "interviewer"},
-)
+graph_builder.add_edge("report_gen", END)
 
 # ── 컴파일 ───────────────────────────────────────────────────────────
 os.makedirs("data", exist_ok=True)

@@ -21,17 +21,39 @@ def route_analyzer(state: State) -> str:
     return "done"
 
 
-def route_by_score(state: State) -> str:
+def route_after_eval(state: State) -> str:
+    """evaluator 실행 후 다음 노드를 결정한다.
+
+    완료 판정:
+      - sequential: answered_count >= total_questions
+      - free_order : len(answered_indices) >= len(question_pool)
+
+    미완료 시:
+      - coaching_mode == "simple" → 다음 질문으로 바로 이동 ("continue")
+      - coaching_mode == "full"   → 점수에 따라 hint / similar / followup
+    """
+    cfg            = state.get("interview_config", {})
+    interview_mode = cfg.get("interview_mode", "sequential")
+    coaching_mode  = cfg.get("coaching_mode", "full")
+
+    # ── 완료 판정 ────────────────────────────────────────────────────
+    if interview_mode == "free_order":
+        answered_indices = state.get("answered_indices", [])
+        total            = len(state.get("question_pool", []))
+        if total > 0 and len(answered_indices) >= total:
+            return "done"
+    else:
+        if state.get("answered_count", 0) >= state.get("total_questions", 1):
+            return "done"
+
+    # ── 코칭 모드 분기 ───────────────────────────────────────────────
+    if coaching_mode == "simple":
+        return "continue"
+
     score = state.get("current_score", 0.0)
-    if score >= 8.0:
-        return "followup"
-    elif score >= 5.0:
+    if score < 5.0:
+        return "hint"
+    elif score < 8.0:
         return "similar"
     else:
-        return "hint"
-
-
-def check_completion(state: State) -> str:
-    if state.get("answered_count", 0) >= state.get("total_questions", 1):
-        return "done"
-    return "continue"
+        return "followup"

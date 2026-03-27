@@ -4,6 +4,7 @@ from pydantic import BaseModel
 
 class AnswerRequest(BaseModel):
     answer: str
+    selected_index: Optional[int] = None   # free_order 모드에서 선택한 질문 인덱스
 
 
 class SessionResponse(BaseModel):
