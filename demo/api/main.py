@@ -35,13 +35,16 @@ def _save_upload(file: Optional[UploadFile], dest: Path) -> Optional[str]:
     return str(path)
 
 
-def _save_to_library(file: Optional[UploadFile]) -> Optional[str]:
-    """업로드된 파일을 라이브러리에도 저장한다."""
+_VALID_DOC_TYPES = {"jd", "resume", "portfolio"}
+
+
+def _save_to_library(file: Optional[UploadFile], doc_type: str) -> Optional[str]:
+    """업로드된 파일을 타입별 서브디렉토리에 저장한다."""
     if file is None or not file.filename:
         return None
-    LIBRARY_DIR.mkdir(parents=True, exist_ok=True)
-    dest = LIBRARY_DIR / file.filename
-    # 파일 포인터를 처음으로 돌린 뒤 복사
+    subdir = LIBRARY_DIR / doc_type
+    subdir.mkdir(parents=True, exist_ok=True)
+    dest = subdir / file.filename
     file.file.seek(0)
     with open(dest, "wb") as f:
         shutil.copyfileobj(file.file, f)
@@ -60,16 +63,21 @@ def _get_interrupt(config: dict) -> Optional[dict]:
 
 @app.get("/library")
 def list_library():
-    """라이브러리에 저장된 파일 목록을 반환한다."""
-    LIBRARY_DIR.mkdir(parents=True, exist_ok=True)
-    files = sorted(f.name for f in LIBRARY_DIR.iterdir() if f.is_file())
-    return {"files": files}
+    """타입별 라이브러리 파일 목록을 반환한다."""
+    result: dict[str, list[str]] = {"jd": [], "resume": [], "portfolio": []}
+    for doc_type in result:
+        subdir = LIBRARY_DIR / doc_type
+        if subdir.exists():
+            result[doc_type] = sorted(f.name for f in subdir.iterdir() if f.is_file())
+    return result
 
 
-@app.delete("/library/{filename}")
-def delete_library_file(filename: str):
+@app.delete("/library/{doc_type}/{filename}")
+def delete_library_file(doc_type: str, filename: str):
     """라이브러리 파일을 삭제한다."""
-    path = LIBRARY_DIR / filename
+    if doc_type not in _VALID_DOC_TYPES:
+        raise HTTPException(400, "잘못된 문서 유형입니다.")
+    path = LIBRARY_DIR / doc_type / filename
     if not path.exists():
         raise HTTPException(404, "파일을 찾을 수 없습니다.")
     path.unlink()
@@ -91,13 +99,13 @@ def start_session(
     session_id = str(uuid.uuid4())
     base = UPLOAD_DIR / session_id
 
-    def _resolve(upload: Optional[UploadFile], library_name: Optional[str], dest: Path) -> Optional[str]:
-        """업로드 파일 우선, 없으면 라이브러리 파일 사용. 업로드 시 라이브러리에도 저장."""
+    def _resolve(upload: Optional[UploadFile], library_name: Optional[str], doc_type: str, dest: Path) -> Optional[str]:
+        """업로드 파일 우선, 없으면 타입별 라이브러리 파일 사용. 업로드 시 라이브러리에도 저장."""
         if upload and upload.filename:
-            _save_to_library(upload)        # 라이브러리에 저장
+            _save_to_library(upload, doc_type)
             return _save_upload(upload, dest)
         if library_name:
-            lib_path = LIBRARY_DIR / library_name
+            lib_path = LIBRARY_DIR / doc_type / library_name
             if lib_path.exists():
                 dest.parent.mkdir(parents=True, exist_ok=True)
                 target = dest.with_suffix(lib_path.suffix)
@@ -106,9 +114,9 @@ def start_session(
         return None
 
     selected_files = {
-        "jd":        _resolve(jd,        jd_library,        base / "jd"),
-        "resume":    _resolve(resume,    resume_library,    base / "resume"),
-        "portfolio": _resolve(portfolio, portfolio_library, base / "portfolio"),
+        "jd":        _resolve(jd,        jd_library,        "jd",        base / "jd"),
+        "resume":    _resolve(resume,    resume_library,    "resume",    base / "resume"),
+        "portfolio": _resolve(portfolio, portfolio_library, "portfolio", base / "portfolio"),
     }
 
     if not selected_files.get("jd"):
