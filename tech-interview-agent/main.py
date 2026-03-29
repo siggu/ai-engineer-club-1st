@@ -1,5 +1,7 @@
+import sqlite3
 from langgraph.graph import StateGraph, START, END
 from langgraph.graph.message import add_messages, MessagesState
+from langgraph.checkpoint.sqlite import SqliteSaver
 from langgraph.prebuilt import ToolNode, tools_condition
 from typing_extensions import TypedDict
 from typing import Annotated
@@ -13,6 +15,8 @@ load_dotenv()
 
 # llm 설정
 llm = init_chat_model("openai:gpt-5.4-mini")
+
+conn = sqlite3.connect("memory.db", check_same_thread=False)
 
 
 # 챗봇 메세지 State 설정
@@ -57,8 +61,18 @@ graph_builder.add_edge("tools", "chatbot")
 
 
 # 그래프 컴파일
-graph = graph_builder.compile()
+graph = graph_builder.compile(
+    checkpointer=SqliteSaver(conn),
+)
 
 print(
-    graph.invoke({"messages": [{"role": "user", "content": "현재 환율은 얼마인가요"}]})
+    graph.invoke(
+        {"messages": [{"role": "user", "content": "제가 뭐라고 질문했었죠"}]},
+        config={
+            "configurable": {
+                "thread_id": "1",
+            },
+            "recursion_limit": 10,
+        },
+    )
 )
