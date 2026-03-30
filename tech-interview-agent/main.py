@@ -3,6 +3,7 @@ from langgraph.graph import StateGraph, START, END
 from langgraph.graph.message import add_messages, MessagesState
 from langgraph.checkpoint.sqlite import SqliteSaver
 from langgraph.prebuilt import ToolNode, tools_condition
+from langgraph.types import interrupt, Command
 from typing_extensions import TypedDict
 from typing import Annotated
 from langchain.chat_models import init_chat_model
@@ -31,18 +32,38 @@ web_search_tool = TavilySearch(
 )
 
 
-llm_with_tools = llm.bind_tools(tools=[web_search_tool])
+@tool
+def get_answer(question: str):
+    """
+    질문에 대한 답변을 하도록 하세요.\n
+    최종 답변 전에 반드시 답변을 받으세요.
+    """
+    feedback = interrupt(f"질문에 대한 답변을 해주세요. \n 질문: \n{question}")
+    return feedback
+
+
+llm_with_tools = llm.bind_tools(tools=[web_search_tool, get_answer])
 
 
 # 챗봇 노드 생성
 def chatbot(state: State) -> State:
-    response = llm_with_tools.invoke(state["messages"])
+    system_prompt = {
+        "role": "system",
+        "content": """당신은 AI 개발자를 채용하는 기술 면접관입니다.
+
+        규칙:
+        1. 대화가 시작되면 AI 관련 기술 면접 질문을 하나 생성하세요. (최신 AI 기술에 대해 질문하려면 `web_search_tool`을 사용하세요.)
+        2. 반드시 `get_answer` 도구를 호출해 지원자의 답변을 받으세요. `question` 인자에는 당신이 생성한 면접 질문을 넣으세요.
+        3. 답변을 받은 후 정확도와 깊이를 평가해 피드백을 제공하세요.
+        4. 절대로 당신이 직접 질문에 답하지 마세요.""",
+    }
+    response = llm_with_tools.invoke([system_prompt] + state["messages"])
     return {"messages": [response]}
 
 
 # tool 노드 생성
 tool_node = ToolNode(
-    tools=[web_search_tool],
+    tools=[web_search_tool, get_answer],
 )
 
 # StateGraph 설정
@@ -65,14 +86,23 @@ graph = graph_builder.compile(
     checkpointer=SqliteSaver(conn),
 )
 
-print(
-    graph.invoke(
-        {"messages": [{"role": "user", "content": "제가 뭐라고 질문했었죠"}]},
-        config={
-            "configurable": {
-                "thread_id": "1",
-            },
-            "recursion_limit": 10,
-        },
-    )
+# config 설정
+config = {"configurable": {"thread_id": "4"}, "recursion_limit": 10}
+
+
+# 첫 실행
+result = graph.invoke(
+    {"messages": [{"role": "user", "content": "네. 정리해주세요."}]},
+    config=config,
 )
+
+
+for message in result["messages"]:
+    message.pretty_print()
+
+# interrupt 이후 사용자 입력 받기, Command로 재개
+user_answer = input("답변을 입력하세요.")
+result = graph.invoke(Command(resume=user_answer), config=config)
+
+for message in result["messages"]:
+    message.pretty_print()
