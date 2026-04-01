@@ -1,3 +1,5 @@
 .env
 uv.lock
 .streamlit
+assignment.md
+CLAUDE.md
