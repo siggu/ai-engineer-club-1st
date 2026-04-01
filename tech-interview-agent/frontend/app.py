@@ -6,6 +6,7 @@ import streamlit as st
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from app.graph.graph import create_default_graph
+from app.llm import AVAILABLE_MODELS, DEFAULT_MODEL
 
 st.set_page_config(page_title="꼬리에 꼬리를 무는 면접", layout="wide")
 st.title("꼬리에 꼬리를 무는 면접")
@@ -96,6 +97,16 @@ with st.sidebar:
     show_model_answer = st.toggle("모범 답안 공개 (학습 모드)", value=False)
 
     st.divider()
+    st.header("모델 선택")
+
+    model_id = st.selectbox(
+        "LLM 모델",
+        options=list(AVAILABLE_MODELS.keys()),
+        format_func=lambda x: AVAILABLE_MODELS[x],
+        index=list(AVAILABLE_MODELS.keys()).index(DEFAULT_MODEL),
+    )
+
+    st.divider()
 
     start_btn = st.button("면접 시작", type="primary", use_container_width=True)
 
@@ -115,6 +126,7 @@ if start_btn and jd_raw.strip():
         "followup_styles": selected_styles if selected_styles else ["deepdive"],
         "feedback_timing": feedback_timing,
         "show_model_answer": show_model_answer,
+        "model": model_id,
     }
 
     with st.spinner("입력 내용을 분석 중입니다..."):
