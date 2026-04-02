@@ -243,40 +243,31 @@ if st.session_state.stage == "setup":
 
     # ── 사이드바: 문서 업로드 + 면접 설정 ────────────────────────────
     with st.sidebar:
-        st.markdown("## 🎯 면접 설정")
+        st.markdown("## 면접 설정")
 
         library_files = api_get_library()
+
+        # ── 저장된 파일 라이브러리 ────────────────────────────────────
         total_lib = sum(len(v) for v in library_files.values())
         if total_lib:
-            with st.expander(f"📁 저장된 파일 ({total_lib}개)", expanded=False):
+            with st.expander(f"내 파일 라이브러리 ({total_lib}개)", expanded=False):
                 for doc_type, fnames in library_files.items():
                     if not fnames:
                         continue
-                    st.markdown(
-                        f"<p style='font-size:11px;font-weight:700;color:#6b7280;"
-                        f"text-transform:uppercase;letter-spacing:.5px;margin:8px 0 4px 0'>"
-                        f"{_TYPE_LABEL_KO[doc_type]}</p>",
-                        unsafe_allow_html=True,
-                    )
+                    st.caption(_TYPE_LABEL_KO[doc_type].upper())
                     for fname in fnames:
-                        col_f, col_d = st.columns([9, 1])
+                        col_f, col_d = st.columns([8, 1])
                         col_f.caption(f"📄 {fname}")
-                        if col_d.button(
-                            "🗑", key=f"del_{doc_type}_{fname}", help=f"{fname} 삭제"
-                        ):
+                        if col_d.button("✕", key=f"del_{doc_type}_{fname}", help=f"{fname} 삭제"):
                             try:
                                 api_delete_library_file(doc_type, fname)
-                                st.toast(f"{fname} 삭제됨", icon="🗑")
+                                st.toast(f"{fname} 삭제됨")
                                 st.rerun()
                             except Exception as e:
                                 st.error(str(e))
 
-        # ── JD 섹션 (form 밖 — URL 미리보기 버튼 필요) ──────────────────
-        st.markdown(
-            "<p style='font-size:13px;font-weight:700;margin:12px 0 6px 0'>"
-            "📄 채용공고 (JD) <span style='color:#ef4444;font-size:11px'>필수</span></p>",
-            unsafe_allow_html=True,
-        )
+        # ── JD 섹션 ──────────────────────────────────────────────────
+        st.markdown("**📄 채용공고** `필수`")
         jd_mode = st.radio(
             "JD 입력 방식",
             options=["파일", "URL", "직접 입력", "라이브러리"],
@@ -301,58 +292,54 @@ if st.session_state.stage == "setup":
                 placeholder="https://www.wanted.co.kr/...",
                 label_visibility="collapsed",
             )
-            st.info(
-                "면접 시작 시 자동으로 내용을 추출합니다. "
-                "추출 결과는 면접 중 사이드바에서 확인 가능합니다.\n\n"
-                "⚠️ **React/Next.js 기반 사이트(zighang, 잡플래닛 등)는 추출이 불완전할 수 있습니다.** "
-                "정확한 분석을 원하면 '직접 입력' 탭을 사용하세요.",
-                icon="🔗",
-            )
+            st.caption("⚠️ React 기반 사이트(잡플래닛 등)는 추출이 불완전할 수 있습니다. 정확한 분석은 '직접 입력'을 권장합니다.")
 
         elif jd_mode == "직접 입력":
             jd_text_paste = st.text_area(
                 "채용공고 내용 붙여넣기",
                 key="jd_text_paste",
-                height=220,
-                placeholder="채용공고 내용을 여기에 직접 붙여넣으세요...",
+                height=180,
+                placeholder="채용공고 내용을 여기에 붙여넣으세요...",
                 label_visibility="collapsed",
             )
             if jd_text_paste:
-                st.caption(f"📝 {len(jd_text_paste):,}자 입력됨")
+                st.caption(f"{len(jd_text_paste):,}자 입력됨")
 
         elif jd_mode == "라이브러리":
             jd_lib_files = library_files.get("jd", [])
-            sel = st.selectbox(
-                "저장된 JD 선택",
-                options=[_none] + jd_lib_files,
-                key="lib_jd",
-                label_visibility="collapsed",
-            )
-            jd_lib_jd = None if sel == _none else sel
+            if jd_lib_files:
+                sel = st.selectbox(
+                    "저장된 JD 선택",
+                    options=[_none] + jd_lib_files,
+                    key="lib_jd",
+                    label_visibility="collapsed",
+                )
+                jd_lib_jd = None if sel == _none else sel
+            else:
+                st.caption("저장된 채용공고가 없습니다. 파일을 먼저 업로드해주세요.")
 
         st.divider()
 
-        # ── AI 모델 선택 (form 밖 — 변경 즉시 rerun으로 모델 목록 갱신) ──
+        # ── AI 모델 선택 ──────────────────────────────────────────────
         st.markdown("**🤖 AI 모델**")
         _MODEL_OPTIONS = {
             "anthropic": [
-                ("claude-sonnet-4-6", "Claude Sonnet 4.6"),
-                ("claude-haiku-4-5-20251001", "Claude Haiku 4.5"),
+                ("claude-sonnet-4-6", "Claude Sonnet 4.6 (권장)"),
+                ("claude-haiku-4-5-20251001", "Claude Haiku 4.5 (빠름)"),
             ],
             "openai": [
                 ("gpt-5.4-mini", "GPT-5.4-mini"),
                 ("gpt-5.4-nano", "GPT-5.4-nano"),
             ],
         }
-        llm_provider = st.selectbox(
-            "AI 제공사",
+        col_p, col_m = st.columns(2)
+        llm_provider = col_p.selectbox(
+            "제공사",
             options=["anthropic", "openai"],
-            format_func=lambda x: (
-                "Claude (Anthropic)" if x == "anthropic" else "GPT (OpenAI)"
-            ),
+            format_func=lambda x: "Anthropic" if x == "anthropic" else "OpenAI",
             key="sel_llm_provider",
         )
-        llm_model = st.selectbox(
+        llm_model = col_m.selectbox(
             "모델",
             options=[m for m, _ in _MODEL_OPTIONS[llm_provider]],
             format_func=lambda x: next(
@@ -369,11 +356,7 @@ if st.session_state.stage == "setup":
             def _file_slot(
                 icon: str, label: str, key_up: str, key_lib: str, doc_type: str
             ):
-                st.markdown(
-                    f"<p style='font-size:13px;font-weight:600;margin:6px 0 4px 0'>"
-                    f"{icon} {label}</p>",
-                    unsafe_allow_html=True,
-                )
+                st.markdown(f"**{icon} {label}**")
                 f = st.file_uploader(
                     label,
                     type=["pdf", "txt", "md"],
@@ -400,40 +383,33 @@ if st.session_state.stage == "setup":
             st.divider()
             st.markdown("**⚙️ 면접 설정**")
 
-            interview_mode = st.selectbox(
-                "면접 방식",
-                options=["sequential", "free_order"],
-                format_func=lambda x: "순서대로" if x == "sequential" else "자유 선택",
-                help="면접 방식: '순서대로'는 질문이 순차적으로 나오며, '자유 선택'은 모든 질문이 한 번에 나오고 원하는 순서로 답변할 수 있습니다.",
+            n_questions = st.slider("질문 수", min_value=5, max_value=20, value=10, step=1)
+
+            _free_order = st.toggle(
+                "자유 선택 모드",
+                value=False,
+                help="켜면 모든 질문이 한 번에 표시되고 원하는 순서로 답변할 수 있습니다.",
             )
-            coaching_mode = st.selectbox(
-                "코칭 방식",
-                options=["full", "simple"],
-                format_func=lambda x: "힌트·심화 코칭" if x == "full" else "즉시 채점",
-                help="코칭 방식: '힌트·심화 코칭'은 답변에 따라 힌트와 심화 질문이 제공되며, '즉시 채점'은 답변 제출 후 간단한 점수만 제공합니다.",
+            interview_mode = "free_order" if _free_order else "sequential"
+
+            _simple_coaching = st.toggle(
+                "즉시 채점 모드",
+                value=False,
+                help="켜면 힌트·심화 질문 없이 바로 다음 질문으로 넘어갑니다.",
             )
-            n_questions = st.slider(
-                "질문 수", min_value=5, max_value=20, value=10, step=1
-            )
-            question_type = st.selectbox(
+            coaching_mode = "simple" if _simple_coaching else "full"
+
+            question_type = st.radio(
                 "질문 유형",
                 options=["mixed", "tech", "experience", "pressure"],
-                format_func=lambda x: {
-                    "mixed": "혼합",
-                    "tech": "기술",
-                    "experience": "경험",
-                    "pressure": "압박",
-                }[x],
+                format_func=lambda x: {"mixed": "혼합", "tech": "기술", "experience": "경험", "pressure": "압박"}[x],
+                horizontal=True,
             )
-            difficulty = st.selectbox(
+            difficulty = st.radio(
                 "난이도",
                 options=["mixed", "easy", "medium", "hard"],
-                format_func=lambda x: {
-                    "mixed": "혼합",
-                    "easy": "쉬움",
-                    "medium": "보통",
-                    "hard": "어려움",
-                }[x],
+                format_func=lambda x: {"mixed": "혼합", "easy": "쉬움", "medium": "보통", "hard": "어려움"}[x],
+                horizontal=True,
             )
 
             submitted = st.form_submit_button(
