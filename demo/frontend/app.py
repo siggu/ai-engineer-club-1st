@@ -8,7 +8,7 @@ import httpx
 API_URL = os.getenv("API_URL", "http://localhost:8000")
 
 st.set_page_config(
-    page_title="기술면접 도우미 에이전트",
+    page_title="꼬리에 꼬리를 무는 면접",
     page_icon="🎯",
     layout="wide",
 )
@@ -328,18 +328,20 @@ if st.session_state.stage == "setup":
         st.markdown("**🤖 AI 모델**")
         _MODEL_OPTIONS = {
             "anthropic": [
-                ("claude-sonnet-4-6",         "Claude Sonnet 4.6 (권장)"),
-                ("claude-haiku-4-5-20251001",  "Claude Haiku 4.5 (빠름)"),
+                ("claude-sonnet-4-6", "Claude Sonnet 4.6 (권장)"),
+                ("claude-haiku-4-5-20251001", "Claude Haiku 4.5 (빠름)"),
             ],
             "openai": [
-                ("gpt-5",       "GPT-5 (권장)"),
-                ("gpt-5-mini",  "GPT-5 Mini (빠름·저렴)"),
+                ("gpt-5", "GPT-5 (권장)"),
+                ("gpt-5-mini", "GPT-5 Mini (빠름·저렴)"),
             ],
         }
         llm_provider = st.selectbox(
             "AI 제공사",
             options=["anthropic", "openai"],
-            format_func=lambda x: "Claude (Anthropic)" if x == "anthropic" else "GPT (OpenAI)",
+            format_func=lambda x: (
+                "Claude (Anthropic)" if x == "anthropic" else "GPT (OpenAI)"
+            ),
             key="sel_llm_provider",
         )
         llm_model = st.selectbox(
@@ -519,32 +521,32 @@ if st.session_state.stage == "setup":
                 for i, (s_icon, s_title, s_desc) in enumerate(_ANALYSIS_STEPS):
                     if i < cur:
                         # 완료된 단계
-                        card_bg    = "#161c2c"
-                        card_border= "1px solid #2a3148"
-                        dot_bg     = "#14532d"
-                        dot_content= "✓"
-                        dot_color  = "#22c55e"
-                        title_color= "#4b5563"
+                        card_bg = "#161c2c"
+                        card_border = "1px solid #2a3148"
+                        dot_bg = "#14532d"
+                        dot_content = "✓"
+                        dot_color = "#22c55e"
+                        title_color = "#4b5563"
                         desc_color = "#374151"
                         anim_style = ""
                     elif i == cur:
                         # 진행 중인 단계
-                        card_bg    = "#172036"
-                        card_border= "1px solid #4f8ef7"
-                        dot_bg     = "#1e3a6e"
-                        dot_content= s_icon
-                        dot_color  = "#4f8ef7"
-                        title_color= "#e2e8f0"
+                        card_bg = "#172036"
+                        card_border = "1px solid #4f8ef7"
+                        dot_bg = "#1e3a6e"
+                        dot_content = s_icon
+                        dot_color = "#4f8ef7"
+                        title_color = "#e2e8f0"
                         desc_color = "#94a3b8"
                         anim_style = "animation:stepPulse 1.8s ease-in-out infinite;"
                     else:
                         # 대기 중인 단계
-                        card_bg    = "#111827"
-                        card_border= "1px solid transparent"
-                        dot_bg     = "#1f2937"
-                        dot_content= s_icon
-                        dot_color  = "#374151"
-                        title_color= "#374151"
+                        card_bg = "#111827"
+                        card_border = "1px solid transparent"
+                        dot_bg = "#1f2937"
+                        dot_content = s_icon
+                        dot_color = "#374151"
+                        title_color = "#374151"
                         desc_color = "#1f2937"
                         anim_style = ""
 
@@ -567,8 +569,8 @@ if st.session_state.stage == "setup":
                     </div>
                     """
 
-                bar_pct   = round((cur + 1) / len(_ANALYSIS_STEPS) * 100)
-                bar_filled= round((cur + 1) / len(_ANALYSIS_STEPS) * 28)
+                bar_pct = round((cur + 1) / len(_ANALYSIS_STEPS) * 100)
+                bar_filled = round((cur + 1) / len(_ANALYSIS_STEPS) * 28)
 
                 with progress_ph.container():
                     st.markdown(
@@ -636,7 +638,7 @@ if st.session_state.stage == "setup":
             <div style="text-align:center;padding:56px 0 40px 0">
                 <p style="font-size:56px;margin:0">🎯</p>
                 <h1 style="font-size:36px;font-weight:800;margin:12px 0 8px 0;color:#111827">
-                    기술면접 도우미 에이전트
+                    꼬리에 꼬리를 무는 면접
                 </h1>
                 <p style="color:#6b7280;font-size:16px;margin:0;line-height:1.6">
                     채용공고 × 자기소개서 × 포트폴리오를 AI가 교차 분석해<br>
