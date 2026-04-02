@@ -1,17 +1,26 @@
 #!/usr/bin/env python3
+"""
+Railway injects STREAMLIT_SERVER_PORT='$PORT' (literal string) which causes Streamlit to fail.
+This script removes that bad value from the environment BEFORE any Streamlit import occurs,
+then runs Streamlit in-process so Railway cannot re-inject the env var.
+"""
 import os
 import sys
 
-# Railway injects STREAMLIT_SERVER_PORT='$PORT' (literal string), not the expanded value.
-# Read the actual port from PORT env var (which Railway sets correctly as a number).
 port = os.environ.get("PORT", "8501")
 
-# Overwrite STREAMLIT_SERVER_PORT with the real port number before exec'ing streamlit.
-os.environ["STREAMLIT_SERVER_PORT"] = port
+# Must happen before any streamlit import — Streamlit reads env vars on first import
+os.environ.pop("STREAMLIT_SERVER_PORT", None)
+os.environ["STREAMLIT_SERVER_PORT"] = str(port)
 
-os.execlp(
-    "/app/.venv/bin/streamlit",
+# Construct CLI args so streamlit picks up the port via --server.port as fallback
+sys.argv = [
     "streamlit", "run", "frontend/app.py",
     "--server.address", "0.0.0.0",
     "--server.headless", "true",
-)
+    "--server.port", str(port),
+]
+
+# Run streamlit in-process (no exec/subprocess — Railway cannot re-inject env vars here)
+from streamlit.web.cli import main
+main()
