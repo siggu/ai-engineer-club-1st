@@ -52,7 +52,9 @@ def api_get_library() -> dict[str, list[str]]:
 
 def api_delete_library_file(doc_type: str, filename: str) -> None:
     with httpx.Client(timeout=5) as client:
-        resp = client.delete(f"{API_URL}/library/{doc_type}/{filename}", params={"user_id": USER_ID})
+        resp = client.delete(
+            f"{API_URL}/library/{doc_type}/{filename}", params={"user_id": USER_ID}
+        )
     resp.raise_for_status()
 
 
@@ -334,12 +336,12 @@ if st.session_state.stage == "setup":
         st.markdown("**🤖 AI 모델**")
         _MODEL_OPTIONS = {
             "anthropic": [
-                ("claude-sonnet-4-6", "Claude Sonnet 4.6 (권장)"),
-                ("claude-haiku-4-5-20251001", "Claude Haiku 4.5 (빠름)"),
+                ("claude-sonnet-4-6", "Claude Sonnet 4.6"),
+                ("claude-haiku-4-5-20251001", "Claude Haiku 4.5"),
             ],
             "openai": [
-                ("gpt-5", "GPT-5 (권장)"),
-                ("gpt-5-mini", "GPT-5 Mini (빠름·저렴)"),
+                ("gpt-5.4-mini", "GPT-5.4-mini"),
+                ("gpt-5.4-nano", "GPT-5.4-nano"),
             ],
         }
         llm_provider = st.selectbox(
@@ -518,107 +520,33 @@ if st.session_state.stage == "setup":
             api_thread = threading.Thread(target=_run_api, daemon=True)
             api_thread.start()
 
-            progress_ph = st.empty()
+            # 진행 상황 UI (Streamlit 네이티브 컴포넌트)
+            st.markdown("#### 🤖 AI가 문서를 분석하고 있습니다")
+            st.caption("보통 30~60초 소요됩니다")
+            progress_bar = st.progress(0)
+            step_containers = [st.empty() for _ in _ANALYSIS_STEPS]
+
             step_idx = 0
             while api_thread.is_alive():
                 cur = step_idx % len(_ANALYSIS_STEPS)
+                bar_pct = (cur + 1) / len(_ANALYSIS_STEPS)
+                progress_bar.progress(bar_pct, text=f"{cur + 1} / {len(_ANALYSIS_STEPS)} 단계")
 
-                steps_html = ""
                 for i, (s_icon, s_title, s_desc) in enumerate(_ANALYSIS_STEPS):
                     if i < cur:
-                        # 완료된 단계
-                        card_bg = "#161c2c"
-                        card_border = "1px solid #2a3148"
-                        dot_bg = "#14532d"
-                        dot_content = "✓"
-                        dot_color = "#22c55e"
-                        title_color = "#4b5563"
-                        desc_color = "#374151"
-                        anim_style = ""
+                        step_containers[i].success(f"**{s_title}**  \n{s_desc}", icon="✅")
                     elif i == cur:
-                        # 진행 중인 단계
-                        card_bg = "#172036"
-                        card_border = "1px solid #4f8ef7"
-                        dot_bg = "#1e3a6e"
-                        dot_content = s_icon
-                        dot_color = "#4f8ef7"
-                        title_color = "#e2e8f0"
-                        desc_color = "#94a3b8"
-                        anim_style = "animation:stepPulse 1.8s ease-in-out infinite;"
+                        step_containers[i].info(f"**{s_icon} {s_title}**  \n{s_desc}", icon=None)
                     else:
-                        # 대기 중인 단계
-                        card_bg = "#111827"
-                        card_border = "1px solid transparent"
-                        dot_bg = "#1f2937"
-                        dot_content = s_icon
-                        dot_color = "#374151"
-                        title_color = "#374151"
-                        desc_color = "#1f2937"
-                        anim_style = ""
+                        step_containers[i].empty()
 
-                    steps_html += f"""
-                    <div style="display:flex;align-items:flex-start;gap:14px;
-                                padding:13px 16px;border-radius:10px;
-                                background:{card_bg};border:{card_border};
-                                margin-bottom:7px;{anim_style}">
-                      <div style="width:36px;height:36px;min-width:36px;border-radius:50%;
-                                  background:{dot_bg};color:{dot_color};
-                                  display:flex;align-items:center;justify-content:center;
-                                  font-size:15px;font-weight:700">
-                        {dot_content}
-                      </div>
-                      <div style="flex:1">
-                        <div style="font-size:0.92rem;font-weight:{'700' if i==cur else '500'};
-                                    color:{title_color}">{s_title}</div>
-                        <div style="font-size:0.80rem;color:{desc_color};margin-top:3px">{s_desc}</div>
-                      </div>
-                    </div>
-                    """
-
-                bar_pct = round((cur + 1) / len(_ANALYSIS_STEPS) * 100)
-                bar_filled = round((cur + 1) / len(_ANALYSIS_STEPS) * 28)
-
-                with progress_ph.container():
-                    st.markdown(
-                        f"""
-                        <style>
-                        @keyframes stepPulse {{
-                          0%,100% {{ opacity:1; box-shadow:0 0 0 0 rgba(79,142,247,.25); }}
-                          50%      {{ opacity:.88; box-shadow:0 0 0 6px rgba(79,142,247,.0); }}
-                        }}
-                        </style>
-                        <div style="max-width:540px;margin:0 auto">
-                          <div style="text-align:center;padding:4px 0 20px">
-                            <div style="font-size:1.45rem;font-weight:700;color:#e2e8f0">
-                              🤖 AI가 문서를 분석하고 있습니다
-                            </div>
-                            <div style="color:#6b7280;font-size:0.86rem;margin-top:6px">
-                              보통 30~60초 소요됩니다
-                            </div>
-                          </div>
-                          {steps_html}
-                          <div style="margin-top:16px;padding:0 2px">
-                            <div style="display:flex;justify-content:space-between;
-                                        font-size:0.78rem;color:#4b5563;margin-bottom:6px">
-                              <span>진행률</span>
-                              <span>{cur + 1} / {len(_ANALYSIS_STEPS)} 단계</span>
-                            </div>
-                            <div style="background:#1f2937;border-radius:999px;height:6px;overflow:hidden">
-                              <div style="height:100%;width:{bar_pct}%;
-                                          background:linear-gradient(90deg,#3b82f6,#60a5fa);
-                                          border-radius:999px;
-                                          transition:width .5s ease"></div>
-                            </div>
-                          </div>
-                        </div>
-                        """,
-                        unsafe_allow_html=True,
-                    )
                 time.sleep(7)
                 step_idx += 1
 
             api_thread.join()
-            progress_ph.empty()
+            progress_bar.empty()
+            for c in step_containers:
+                c.empty()
 
             try:
                 if "v" in error_box:

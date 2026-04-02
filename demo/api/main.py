@@ -342,13 +342,18 @@ def start_session(
         config_dict = {}
 
     config = {"configurable": {"thread_id": session_id}}
-    graph.invoke(
-        {
-            "selected_files":   selected_files,
-            "interview_config": config_dict,
-        },
-        config=config,
-    )
+    try:
+        graph.invoke(
+            {
+                "selected_files":   selected_files,
+                "interview_config": config_dict,
+            },
+            config=config,
+        )
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(500, f"그래프 실행 오류: {type(e).__name__}: {e}")
 
     question = _get_interrupt(config)
     if question is None:
