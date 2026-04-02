@@ -105,6 +105,7 @@ def merge_parsed(state: State) -> dict:
 # ── 분석 ────────────────────────────────────────────────────────────
 
 def analyzer(state: State) -> dict:
+    cfg              = state.get("interview_config", {})
     jd_parsed        = state.get("jd_parsed", {})
     resume_parsed    = state.get("resume_parsed", {})
     portfolio_parsed = state.get("portfolio_parsed", {})
