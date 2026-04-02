@@ -240,22 +240,26 @@ def _get_interrupt(config: dict) -> Optional[dict]:
 # ── 라이브러리 엔드포인트 ─────────────────────────────────────────────
 
 @app.get("/library")
-def list_library():
-    """타입별 라이브러리 파일 목록을 반환한다."""
+def list_library(user_id: str = ""):
+    """유저별 타입별 라이브러리 파일 목록을 반환한다."""
     result: dict[str, list[str]] = {"jd": [], "resume": [], "portfolio": []}
+    if not user_id:
+        return result
     for doc_type in result:
-        subdir = LIBRARY_DIR / doc_type
+        subdir = LIBRARY_DIR / user_id / doc_type
         if subdir.exists():
             result[doc_type] = sorted(f.name for f in subdir.iterdir() if f.is_file())
     return result
 
 
 @app.delete("/library/{doc_type}/{filename}")
-def delete_library_file(doc_type: str, filename: str):
-    """라이브러리 파일을 삭제한다."""
+def delete_library_file(doc_type: str, filename: str, user_id: str = ""):
+    """유저별 라이브러리 파일을 삭제한다."""
     if doc_type not in _VALID_DOC_TYPES:
         raise HTTPException(400, "잘못된 문서 유형입니다.")
-    path = LIBRARY_DIR / doc_type / filename
+    if not user_id:
+        raise HTTPException(400, "user_id가 필요합니다.")
+    path = LIBRARY_DIR / user_id / doc_type / filename
     if not path.exists():
         raise HTTPException(404, "파일을 찾을 수 없습니다.")
     path.unlink()
@@ -284,9 +288,13 @@ def start_session(
     resume_library: Optional[str] = Form(None),
     portfolio_library: Optional[str] = Form(None),
     interview_config: str = Form("{}"),
+    user_id: Optional[str] = Form(None),
 ):
     session_id = str(uuid.uuid4())
     base = UPLOAD_DIR / session_id
+
+    def _user_lib(doc_type: str) -> Path:
+        return LIBRARY_DIR / (user_id or "_global") / doc_type
 
     def _resolve(
         upload: Optional[UploadFile],
@@ -298,7 +306,10 @@ def start_session(
     ) -> Optional[str]:
         """우선순위: 파일 업로드 > URL > 직접 텍스트 > 라이브러리"""
         if upload and upload.filename:
-            _save_to_library(upload, doc_type)
+            lib_dest = _user_lib(doc_type) / upload.filename
+            lib_dest.parent.mkdir(parents=True, exist_ok=True)
+            lib_dest.write_bytes(upload.file.read())
+            upload.file.seek(0)
             return _save_upload(upload, dest)
         if url and url.strip():
             return _fetch_url_text(url.strip(), dest)
@@ -308,7 +319,7 @@ def start_session(
             path.write_text(raw_text.strip(), encoding="utf-8")
             return str(path)
         if library_name:
-            lib_path = LIBRARY_DIR / doc_type / library_name
+            lib_path = _user_lib(doc_type) / library_name
             if lib_path.exists():
                 dest.parent.mkdir(parents=True, exist_ok=True)
                 target = dest.with_suffix(lib_path.suffix)

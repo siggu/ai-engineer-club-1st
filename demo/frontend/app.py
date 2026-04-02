@@ -2,6 +2,7 @@ import json
 import os
 import threading
 import time
+import uuid
 import streamlit as st
 import httpx
 
@@ -12,6 +13,11 @@ st.set_page_config(
     page_icon="🎯",
     layout="wide",
 )
+
+# ── 유저 ID (쿼리 파라미터로 브라우저에 유지) ────────────────────────
+if "uid" not in st.query_params:
+    st.query_params["uid"] = str(uuid.uuid4())
+USER_ID: str = st.query_params["uid"]
 
 # ── 세션 상태 초기화 ─────────────────────────────────────────────────
 for key, default in {
@@ -37,7 +43,7 @@ for key, default in {
 def api_get_library() -> dict[str, list[str]]:
     try:
         with httpx.Client(timeout=5) as client:
-            resp = client.get(f"{API_URL}/library")
+            resp = client.get(f"{API_URL}/library", params={"user_id": USER_ID})
         resp.raise_for_status()
         return resp.json()  # {"jd": [...], "resume": [...], "portfolio": [...]}
     except Exception:
@@ -46,7 +52,7 @@ def api_get_library() -> dict[str, list[str]]:
 
 def api_delete_library_file(doc_type: str, filename: str) -> None:
     with httpx.Client(timeout=5) as client:
-        resp = client.delete(f"{API_URL}/library/{doc_type}/{filename}")
+        resp = client.delete(f"{API_URL}/library/{doc_type}/{filename}", params={"user_id": USER_ID})
     resp.raise_for_status()
 
 
@@ -76,7 +82,7 @@ def api_start_session(
     portfolio_library: str | None = None,
 ) -> dict:
     files: dict = {}
-    data: dict = {"interview_config": json.dumps(interview_config)}
+    data: dict = {"interview_config": json.dumps(interview_config), "user_id": USER_ID}
 
     if jd_file:
         files["jd"] = (
