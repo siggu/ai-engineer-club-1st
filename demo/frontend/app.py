@@ -268,7 +268,9 @@ if st.session_state.stage == "setup":
                     for fname in fnames:
                         col_f, col_d = st.columns([8, 1])
                         col_f.caption(f"📄 {fname}")
-                        if col_d.button("✕", key=f"del_{doc_type}_{fname}", help=f"{fname} 삭제"):
+                        if col_d.button(
+                            "✕", key=f"del_{doc_type}_{fname}", help=f"{fname} 삭제"
+                        ):
                             try:
                                 api_delete_library_file(doc_type, fname)
                                 st.toast(f"{fname} 삭제됨")
@@ -302,7 +304,9 @@ if st.session_state.stage == "setup":
                 placeholder="https://www.wanted.co.kr/...",
                 label_visibility="collapsed",
             )
-            st.caption("⚠️ React 기반 사이트(잡플래닛 등)는 추출이 불완전할 수 있습니다. 정확한 분석은 '직접 입력'을 권장합니다.")
+            st.caption(
+                "⚠️ React 기반 사이트(잡플래닛 등)는 추출이 불완전할 수 있습니다. 정확한 분석은 '직접 입력'을 권장합니다."
+            )
 
         elif jd_mode == "직접 입력":
             jd_text_paste = st.text_area(
@@ -393,7 +397,9 @@ if st.session_state.stage == "setup":
             st.divider()
             st.markdown("**⚙️ 면접 설정**")
 
-            n_questions = st.slider("질문 수", min_value=5, max_value=20, value=10, step=1)
+            n_questions = st.slider(
+                "질문 수", min_value=1, max_value=20, value=10, step=1
+            )
 
             _free_order = st.toggle(
                 "자유 선택 모드",
@@ -412,13 +418,23 @@ if st.session_state.stage == "setup":
             question_type = st.radio(
                 "질문 유형",
                 options=["mixed", "tech", "experience", "pressure"],
-                format_func=lambda x: {"mixed": "혼합", "tech": "기술", "experience": "경험", "pressure": "압박"}[x],
+                format_func=lambda x: {
+                    "mixed": "혼합",
+                    "tech": "기술",
+                    "experience": "경험",
+                    "pressure": "압박",
+                }[x],
                 horizontal=True,
             )
             difficulty = st.radio(
                 "난이도",
                 options=["mixed", "easy", "medium", "hard"],
-                format_func=lambda x: {"mixed": "혼합", "easy": "쉬움", "medium": "보통", "hard": "어려움"}[x],
+                format_func=lambda x: {
+                    "mixed": "혼합",
+                    "easy": "쉬움",
+                    "medium": "보통",
+                    "hard": "어려움",
+                }[x],
                 horizontal=True,
             )
 
@@ -516,13 +532,19 @@ if st.session_state.stage == "setup":
             while api_thread.is_alive():
                 cur = step_idx % len(_ANALYSIS_STEPS)
                 bar_pct = (cur + 1) / len(_ANALYSIS_STEPS)
-                progress_bar.progress(bar_pct, text=f"{cur + 1} / {len(_ANALYSIS_STEPS)} 단계")
+                progress_bar.progress(
+                    bar_pct, text=f"{cur + 1} / {len(_ANALYSIS_STEPS)} 단계"
+                )
 
                 for i, (s_icon, s_title, s_desc) in enumerate(_ANALYSIS_STEPS):
                     if i < cur:
-                        step_containers[i].success(f"**{s_title}**  \n{s_desc}", icon="✅")
+                        step_containers[i].success(
+                            f"**{s_title}**  \n{s_desc}", icon="✅"
+                        )
                     elif i == cur:
-                        step_containers[i].info(f"**{s_icon} {s_title}**  \n{s_desc}", icon=None)
+                        step_containers[i].info(
+                            f"**{s_icon} {s_title}**  \n{s_desc}", icon=None
+                        )
                     else:
                         step_containers[i].empty()
 

@@ -231,16 +231,19 @@ def questioner(state: State) -> dict:
         print(f"파싱 오류: {e}")
         question_pool = []
 
+    # LLM이 요청보다 많이 생성할 수 있으므로 n_total로 캡핑
+    question_pool = question_pool[:n_total]
+
     print("✅ questioner 완료")
-    print(f"  설정: {question_type}/{difficulty}/{n_base}문항")
+    print(f"  설정: {question_type}/{difficulty}/{n_base}문항 (취약영역 보강 포함 {n_total}문항)")
     print(f"  총 질문 수: {len(question_pool)}개")
     for q in question_pool:
         print(f"  [{q.get('type', '?')}/{q.get('difficulty', '?')}] {q.get('question', '')}...")
 
     return {
         "question_pool":    question_pool,
-        "total_questions":  len(question_pool),
-        "answered_indices": [],   # free_order 모드용 초기화
+        "total_questions":  n_total,     # 코칭 질문 삽입 시에도 이 값은 고정됨
+        "answered_indices": [],          # free_order 모드용 초기화
     }
 
 
@@ -354,8 +357,8 @@ def hint_provider(state: State) -> dict:
     print(f"✅ hint_provider — 힌트 생성 완료")
     print(f"  힌트: {result.get('hint', '')}")
     return {
-        "question_pool":   new_pool,
-        "total_questions": len(new_pool),
+        "question_pool": new_pool,
+        # total_questions는 questioner가 설정한 값으로 고정 (코칭 질문 삽입 시 증가하지 않음)
     }
 
 
@@ -395,8 +398,7 @@ def similar_q(state: State) -> dict:
     print(f"✅ similar_q — 유사 질문 생성 완료")
     print(f"  새 질문: {new_question.get('question', '')}...")
     return {
-        "question_pool":   new_pool,
-        "total_questions": len(new_pool),
+        "question_pool": new_pool,
     }
 
 
@@ -438,8 +440,7 @@ def followup_gen(state: State) -> dict:
     print(f"✅ followup_gen — 심화 질문 생성 완료")
     print(f"  새 질문: {new_question.get('question', '')}...")
     return {
-        "question_pool":   new_pool,
-        "total_questions": len(new_pool),
+        "question_pool": new_pool,
     }
 
 
