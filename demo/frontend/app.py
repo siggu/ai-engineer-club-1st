@@ -65,6 +65,16 @@ def api_get_session_status(session_id: str) -> dict:
     return resp.json()
 
 
+def api_get_sessions() -> list[dict]:
+    try:
+        with httpx.Client(timeout=5) as client:
+            resp = client.get(f"{API_URL}/sessions", params={"user_id": USER_ID})
+        resp.raise_for_status()
+        return resp.json()
+    except Exception:
+        return []
+
+
 def api_extract_url(url: str) -> dict:
     with httpx.Client(timeout=30) as client:
         resp = client.post(f"{API_URL}/extract-url", json={"url": url})
@@ -659,6 +669,51 @@ if st.session_state.stage == "setup":
                 """,
                 unsafe_allow_html=True,
             )
+
+        # ── 이전 면접 기록 ─────────────────────────────────────────────
+        past_sessions = api_get_sessions()
+        if past_sessions:
+            st.markdown("<div style='margin-top:48px'></div>", unsafe_allow_html=True)
+            st.markdown(
+                "<p style='font-size:11px;font-weight:700;color:inherit;opacity:0.45;letter-spacing:1.5px;"
+                "text-align:center;text-transform:uppercase;margin-bottom:16px'>이전 면접 기록</p>",
+                unsafe_allow_html=True,
+            )
+            for sess in past_sessions:
+                avg = sess.get("average_score")
+                cnt = sess.get("answered_count")
+                snippet = sess.get("jd_snippet") or "채용공고"
+                created = (sess.get("created_at") or "")[:10]
+                score_text = f"{avg:.1f}점" if avg is not None else "진행 중"
+                label = f"{created}  |  {snippet[:30]}{'…' if len(snippet) > 30 else ''}  |  {score_text}"
+                if avg is None:
+                    continue  # 완료되지 않은 세션은 표시 안 함
+                with st.expander(label):
+                    col_a, col_b, col_c = st.columns(3)
+                    col_a.metric("평균 점수", f"{avg:.1f} / 10.0")
+                    col_b.metric("총 문항", cnt or 0)
+                    col_c.metric(
+                        "종합 평가",
+                        "✅ 합격권" if (avg or 0) >= 7 else "📚 보완 필요",
+                    )
+                    wc = sess.get("weak_categories", [])
+                    if wc:
+                        st.warning(f"**취약 영역:** {', '.join(wc)}")
+                    if st.button(
+                        "상세 결과 보기",
+                        key=f"view_{sess['session_id']}",
+                        use_container_width=True,
+                    ):
+                        try:
+                            status = api_get_session_status(sess["session_id"])
+                            if status.get("status") == "complete":
+                                st.session_state.report = status["report"]
+                                st.session_state.stage = "complete"
+                                st.rerun()
+                            else:
+                                st.info("아직 완료되지 않은 세션입니다.")
+                        except Exception as e:
+                            st.error(f"세션을 불러오는 중 오류가 발생했습니다: {e}")
 
 
 # ── 2단계: 면접 진행 ─────────────────────────────────────────────────

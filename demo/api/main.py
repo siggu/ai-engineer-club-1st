@@ -1,7 +1,9 @@
 import json
 import re
 import shutil
+import sqlite3
 import uuid
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
@@ -27,6 +29,32 @@ app.add_middleware(
 
 UPLOAD_DIR  = Path("data/uploads")
 LIBRARY_DIR = Path("data/library")
+RESULTS_DB  = Path("data/sessions.db")
+
+
+def _results_conn() -> sqlite3.Connection:
+    conn = sqlite3.connect(RESULTS_DB)
+    conn.row_factory = sqlite3.Row
+    return conn
+
+
+def _init_results_table() -> None:
+    RESULTS_DB.parent.mkdir(parents=True, exist_ok=True)
+    with _results_conn() as conn:
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS results (
+                thread_id      TEXT PRIMARY KEY,
+                user_id        TEXT NOT NULL DEFAULT '',
+                jd_snippet     TEXT NOT NULL DEFAULT '',
+                created_at     TEXT NOT NULL DEFAULT '',
+                average_score  REAL,
+                answered_count INTEGER,
+                weak_categories TEXT NOT NULL DEFAULT '[]'
+            )
+        """)
+
+
+_init_results_table()
 
 
 def _save_upload(file: Optional[UploadFile], dest: Path) -> Optional[str]:
@@ -362,6 +390,14 @@ def start_session(
     state_values = graph.get_state(config).values
     jd_summary = state_values.get("jd_parsed", {})
     jd_raw     = state_values.get("jd_raw", "")
+
+    jd_snippet = (jd_raw or "").strip().replace("\n", " ")[:60]
+    with _results_conn() as conn:
+        conn.execute(
+            "INSERT OR IGNORE INTO results (thread_id, user_id, jd_snippet, created_at) VALUES (?, ?, ?, ?)",
+            (session_id, user_id or "", jd_snippet, datetime.now(timezone.utc).isoformat()),
+        )
+
     return {
         "session_id": session_id,
         "status": "in_progress",
@@ -398,15 +434,25 @@ def submit_answer(session_id: str, body: AnswerRequest):
     if not state:
         raise HTTPException(500, "세션 상태를 확인할 수 없습니다.")
 
-    score_history = state.get("score_history", [])
-    avg = sum(score_history) / len(score_history) if score_history else 0.0
+    score_history    = state.get("score_history", [])
+    avg              = sum(score_history) / len(score_history) if score_history else 0.0
+    weak_categories  = list(set(state.get("weak_categories", [])))
+    answered_count   = state.get("answered_count", len(score_history))
+
+    with _results_conn() as conn:
+        conn.execute(
+            """UPDATE results
+               SET average_score = ?, answered_count = ?, weak_categories = ?
+               WHERE thread_id = ?""",
+            (round(avg, 1), answered_count, json.dumps(weak_categories, ensure_ascii=False), session_id),
+        )
 
     return {
         "status": "complete",
         "report": {
             "session_history": state.get("session_history", []),
             "score_history":   score_history,
-            "weak_categories": list(set(state.get("weak_categories", []))),
+            "weak_categories": weak_categories,
             "average_score":   round(avg, 1),
         },
     }
@@ -436,6 +482,31 @@ def get_session_status(session_id: str):
             "average_score":   round(avg, 1),
         },
     }
+
+
+@app.get("/sessions")
+def list_sessions(user_id: str = ""):
+    """유저별 면접 세션 목록을 최신순으로 반환한다."""
+    with _results_conn() as conn:
+        rows = conn.execute(
+            """SELECT thread_id, jd_snippet, created_at, average_score, answered_count, weak_categories
+               FROM results
+               WHERE user_id = ?
+               ORDER BY created_at DESC
+               LIMIT 20""",
+            (user_id,),
+        ).fetchall()
+    return [
+        {
+            "session_id":     row["thread_id"],
+            "jd_snippet":     row["jd_snippet"],
+            "created_at":     row["created_at"],
+            "average_score":  row["average_score"],
+            "answered_count": row["answered_count"],
+            "weak_categories": json.loads(row["weak_categories"] or "[]"),
+        }
+        for row in rows
+    ]
 
 
 @app.get("/health")
