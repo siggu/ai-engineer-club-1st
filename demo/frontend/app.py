@@ -998,6 +998,34 @@ elif st.session_state.stage == "complete":
 
     st.divider()
 
+    # 결과 리포트 다운로드 (Markdown)
+    def _build_report_md(report: dict) -> str:
+        lines = ["# 면접 결과 리포트\n"]
+        lines.append(f"- 평균 점수: **{report.get('average_score', 0):.1f} / 10.0**")
+        lines.append(f"- 총 문항 수: **{len(report.get('session_history', []))}**")
+        wc = report.get("weak_categories", [])
+        if wc:
+            lines.append(f"- 취약 영역: {', '.join(wc)}")
+        lines.append("\n---\n")
+        for rec in report.get("session_history", []):
+            lines.append(
+                f"## Q{rec['q_number']} [{rec['type']} / {rec['difficulty']}]  {rec['score']:.1f}점\n"
+            )
+            lines.append(f"**질문**\n\n{rec['question']}\n")
+            lines.append(f"**내 답변**\n\n{rec['answer']}\n")
+            lines.append(f"**피드백**\n\n{rec['feedback']}\n")
+            lines.append(f"**모범답안**\n\n{rec.get('model_answer', '')}\n")
+            lines.append("---\n")
+        return "\n".join(lines)
+
+    st.download_button(
+        label="결과 리포트 다운로드 (.md)",
+        data=_build_report_md(report),
+        file_name="interview_report.md",
+        mime="text/markdown",
+        use_container_width=True,
+    )
+
     if st.button("새 면접 시작하기", type="primary", use_container_width=True):
         for key in [
             "stage",
