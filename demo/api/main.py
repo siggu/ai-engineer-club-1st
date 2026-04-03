@@ -11,7 +11,7 @@ import httpx
 from bs4 import BeautifulSoup
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 from langgraph.types import Command
 from pydantic import BaseModel
 
@@ -482,6 +482,78 @@ def get_session_status(session_id: str):
             "average_score":   round(avg, 1),
         },
     }
+
+
+@app.post("/sessions/{session_id}/answer/stream")
+def stream_answer(session_id: str, body: AnswerRequest):
+    """답변을 제출하고 채점 결과를 SSE로 스트리밍한다."""
+    config = {"configurable": {"thread_id": session_id}}
+
+    snapshot = graph.get_state(config)
+    if not snapshot.values:
+        raise HTTPException(404, "세션을 찾을 수 없습니다.")
+
+    if body.selected_index is not None:
+        resume_value = {"selected_index": body.selected_index, "answer": body.answer}
+    else:
+        resume_value = body.answer
+
+    def _generate():
+        try:
+            for chunk in graph.stream(
+                Command(resume=resume_value), config=config, stream_mode="updates"
+            ):
+                for node_name, node_output in chunk.items():
+                    if node_name == "evaluator":
+                        session_history = node_output.get("session_history", [])
+                        if session_history:
+                            last = session_history[-1]
+                            event = {
+                                "type": "eval",
+                                "score":        last.get("score", 0),
+                                "feedback":     last.get("feedback", ""),
+                                "model_answer": last.get("model_answer", ""),
+                            }
+                            yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
+        except Exception:
+            pass
+
+        # 그래프 완료 후 최종 상태 전송
+        question = _get_interrupt(config)
+        if question is not None:
+            event = {"type": "in_progress", "question": question}
+            yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
+        else:
+            state = graph.get_state(config).values
+            if state:
+                score_history   = state.get("score_history", [])
+                avg             = sum(score_history) / len(score_history) if score_history else 0.0
+                weak_categories = list(set(state.get("weak_categories", [])))
+                answered_count  = state.get("answered_count", len(score_history))
+
+                with _results_conn() as conn:
+                    conn.execute(
+                        """UPDATE results
+                           SET average_score = ?, answered_count = ?, weak_categories = ?
+                           WHERE thread_id = ?""",
+                        (round(avg, 1), answered_count,
+                         json.dumps(weak_categories, ensure_ascii=False), session_id),
+                    )
+
+                report = {
+                    "session_history": state.get("session_history", []),
+                    "score_history":   score_history,
+                    "weak_categories": weak_categories,
+                    "average_score":   round(avg, 1),
+                }
+                event = {"type": "complete", "report": report}
+                yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
+
+    return StreamingResponse(
+        _generate(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
 
 
 @app.get("/sessions")

@@ -32,6 +32,7 @@ for key, default in {
     "jd_url_preview": None,
     "jd_summary": {},  # 면접 중 사이드바에 표시할 JD 요약
     "jd_raw": "",  # 추출된 JD 원문 (파싱 실패 시 fallback)
+    "last_eval": None,  # 직전 채점 결과 (score, feedback, model_answer)
 }.items():
     if key not in st.session_state:
         st.session_state[key] = default
@@ -149,6 +150,21 @@ def api_submit_answer(
         )
     resp.raise_for_status()
     return resp.json()
+
+
+def api_stream_answer(session_id: str, answer: str, selected_index: int | None = None):
+    """SSE 스트리밍으로 답변을 제출하고 이벤트를 순서대로 yield한다."""
+    body: dict = {"answer": answer}
+    if selected_index is not None:
+        body["selected_index"] = selected_index
+    with httpx.Client(timeout=120) as client:
+        with client.stream(
+            "POST", f"{API_URL}/sessions/{session_id}/answer/stream", json=body
+        ) as resp:
+            resp.raise_for_status()
+            for line in resp.iter_lines():
+                if line.startswith("data: "):
+                    yield json.loads(line[6:])
 
 
 # ── 질문 카드 렌더러 ─────────────────────────────────────────────────
@@ -817,6 +833,21 @@ elif st.session_state.stage == "interview":
                 st.session_state.pop(key, None)
             st.rerun()
 
+    # ── 직전 채점 결과 (스트리밍 후 저장된 경우) ──────────────────────
+    if st.session_state.last_eval:
+        ev = st.session_state.last_eval
+        score = ev.get("score", 0)
+        color = "#15803d" if score >= 8 else ("#92400e" if score >= 5 else "#b91c1c")
+        with st.expander(f"📋 직전 답변 채점 결과  —  {score:.1f}점", expanded=True):
+            st.markdown(
+                f"<span style='font-size:28px;font-weight:800;color:{color}'>{score:.1f} / 10</span>",
+                unsafe_allow_html=True,
+            )
+            st.markdown(f"**피드백**\n\n{ev.get('feedback', '')}")
+            st.divider()
+            st.success(f"**✅ 모범답안**\n\n{ev.get('model_answer', '')}")
+        st.session_state.last_eval = None
+
     # ── free_order 모드 ──────────────────────────────────────────────
     if q.get("mode") == "free_order":
         answered_count = q.get("answered_count", 0)
@@ -888,60 +919,77 @@ elif st.session_state.stage == "interview":
                 if not answer_val:
                     st.warning("답변을 입력해주세요.")
                 else:
-                    with st.spinner("채점 중..."):
+                    st.session_state.history.append(
+                        {
+                            "q_number": answered_count + 1,
+                            "type": cur_q.get("type", ""),
+                            "difficulty": cur_q.get("difficulty", ""),
+                            "question": cur_q.get("question", ""),
+                            "answer": answer_val,
+                        }
+                    )
+                    st.session_state.fo_answers.pop(cur_q["index"], None)
+                    st.session_state.free_order_page = 0
+                    eval_ph   = st.empty()
+                    status_ph = st.empty()
+                    status_ph.info("채점 중...")
+                    final_event = None
+                    try:
+                        for event in api_stream_answer(
+                            st.session_state.session_id,
+                            answer_val,
+                            selected_index=cur_q["index"],
+                        ):
+                            if event["type"] == "eval":
+                                st.session_state.last_eval = event
+                                score  = event["score"]
+                                color  = "#15803d" if score >= 8 else ("#92400e" if score >= 5 else "#b91c1c")
+                                with eval_ph.container():
+                                    st.markdown(
+                                        f"<span style='font-size:26px;font-weight:800;color:{color}'>"
+                                        f"{score:.1f} / 10</span>",
+                                        unsafe_allow_html=True,
+                                    )
+                                    st.markdown(f"**피드백**\n\n{event.get('feedback', '')}")
+                                    st.success(f"**✅ 모범답안**\n\n{event.get('model_answer', '')}")
+                                status_ph.info("다음 질문을 준비 중...")
+                            elif event["type"] in ("in_progress", "complete"):
+                                final_event = event
+
+                        status_ph.empty()
+                        if final_event and final_event["type"] == "in_progress":
+                            st.session_state.current_question = final_event["question"]
+                            st.rerun()
+                        elif final_event and final_event["type"] == "complete":
+                            st.session_state.report = final_event["report"]
+                            st.session_state.stage = "complete"
+                            st.rerun()
+
+                    except (httpx.HTTPStatusError, Exception) as e:
+                        err_msg = (
+                            e.response.text
+                            if isinstance(e, httpx.HTTPStatusError)
+                            else str(e)
+                        )
+                        # 에러가 나도 백엔드가 완료됐을 수 있으므로 상태를 확인한다
                         try:
-                            result = api_submit_answer(
-                                st.session_state.session_id,
-                                answer_val,
-                                selected_index=cur_q["index"],
+                            status_data = api_get_session_status(
+                                st.session_state.session_id
                             )
-
-                            st.session_state.history.append(
-                                {
-                                    "q_number": answered_count + 1,
-                                    "type": cur_q.get("type", ""),
-                                    "difficulty": cur_q.get("difficulty", ""),
-                                    "question": cur_q.get("question", ""),
-                                    "answer": answer_val,
-                                }
-                            )
-                            # 제출 완료된 질문의 임시 저장 답변 삭제
-                            st.session_state.fo_answers.pop(cur_q["index"], None)
-                            st.session_state.free_order_page = 0  # 다음 라운드 초기화
-
-                            if result["status"] == "in_progress":
-                                st.session_state.current_question = result["question"]
-                                st.rerun()
-                            else:
-                                st.session_state.report = result["report"]
+                            if status_data["status"] == "complete":
+                                st.session_state.report = status_data["report"]
                                 st.session_state.stage = "complete"
                                 st.rerun()
-
-                        except (httpx.HTTPStatusError, Exception) as e:
-                            err_msg = (
-                                e.response.text
-                                if isinstance(e, httpx.HTTPStatusError)
-                                else str(e)
-                            )
-                            # 에러가 나도 백엔드가 완료됐을 수 있으므로 상태를 확인한다
-                            try:
-                                status_data = api_get_session_status(
-                                    st.session_state.session_id
+                            else:
+                                st.session_state.current_question = status_data[
+                                    "question"
+                                ]
+                                st.error(
+                                    f"제출 중 오류가 발생했지만 상태를 복구했습니다: {err_msg}"
                                 )
-                                if status_data["status"] == "complete":
-                                    st.session_state.report = status_data["report"]
-                                    st.session_state.stage = "complete"
-                                    st.rerun()
-                                else:
-                                    st.session_state.current_question = status_data[
-                                        "question"
-                                    ]
-                                    st.error(
-                                        f"제출 중 오류가 발생했지만 상태를 복구했습니다: {err_msg}"
-                                    )
-                                    st.rerun()
-                            except Exception:
-                                st.error(f"오류 발생: {err_msg}")
+                                st.rerun()
+                        except Exception:
+                            st.error(f"오류 발생: {err_msg}")
 
     # ── sequential 모드 ──────────────────────────────────────────────
     else:
@@ -970,54 +1018,70 @@ elif st.session_state.stage == "interview":
             if not answer.strip():
                 st.warning("답변을 입력해주세요.")
             else:
-                with st.spinner("채점 중..."):
+                st.session_state.history.append(
+                    {
+                        "q_number": q_num,
+                        "type": q.get("type", ""),
+                        "difficulty": q.get("difficulty", ""),
+                        "question": q.get("question", ""),
+                        "answer": answer.strip(),
+                    }
+                )
+                eval_ph   = st.empty()
+                status_ph = st.empty()
+                status_ph.info("채점 중...")
+                final_event = None
+                try:
+                    for event in api_stream_answer(st.session_state.session_id, answer.strip()):
+                        if event["type"] == "eval":
+                            st.session_state.last_eval = event
+                            score  = event["score"]
+                            color  = "#15803d" if score >= 8 else ("#92400e" if score >= 5 else "#b91c1c")
+                            with eval_ph.container():
+                                st.markdown(
+                                    f"<span style='font-size:26px;font-weight:800;color:{color}'>"
+                                    f"{score:.1f} / 10</span>",
+                                    unsafe_allow_html=True,
+                                )
+                                st.markdown(f"**피드백**\n\n{event.get('feedback', '')}")
+                                st.success(f"**✅ 모범답안**\n\n{event.get('model_answer', '')}")
+                            status_ph.info("다음 질문을 준비 중...")
+                        elif event["type"] in ("in_progress", "complete"):
+                            final_event = event
+
+                    status_ph.empty()
+                    if final_event and final_event["type"] == "in_progress":
+                        st.session_state.current_question = final_event["question"]
+                        st.rerun()
+                    elif final_event and final_event["type"] == "complete":
+                        st.session_state.report = final_event["report"]
+                        st.session_state.stage = "complete"
+                        st.rerun()
+
+                except (httpx.HTTPStatusError, Exception) as e:
+                    err_msg = (
+                        e.response.text
+                        if isinstance(e, httpx.HTTPStatusError)
+                        else str(e)
+                    )
                     try:
-                        result = api_submit_answer(
-                            st.session_state.session_id, answer.strip()
+                        status_data = api_get_session_status(
+                            st.session_state.session_id
                         )
-
-                        st.session_state.history.append(
-                            {
-                                "q_number": q_num,
-                                "type": q.get("type", ""),
-                                "difficulty": q.get("difficulty", ""),
-                                "question": q.get("question", ""),
-                                "answer": answer.strip(),
-                            }
-                        )
-
-                        if result["status"] == "in_progress":
-                            st.session_state.current_question = result["question"]
-                            st.rerun()
-                        else:
-                            st.session_state.report = result["report"]
+                        if status_data["status"] == "complete":
+                            st.session_state.report = status_data["report"]
                             st.session_state.stage = "complete"
                             st.rerun()
-
-                    except (httpx.HTTPStatusError, Exception) as e:
-                        err_msg = (
-                            e.response.text
-                            if isinstance(e, httpx.HTTPStatusError)
-                            else str(e)
-                        )
-                        try:
-                            status_data = api_get_session_status(
-                                st.session_state.session_id
+                        else:
+                            st.session_state.current_question = status_data[
+                                "question"
+                            ]
+                            st.error(
+                                f"제출 중 오류가 발생했지만 상태를 복구했습니다: {err_msg}"
                             )
-                            if status_data["status"] == "complete":
-                                st.session_state.report = status_data["report"]
-                                st.session_state.stage = "complete"
-                                st.rerun()
-                            else:
-                                st.session_state.current_question = status_data[
-                                    "question"
-                                ]
-                                st.error(
-                                    f"제출 중 오류가 발생했지만 상태를 복구했습니다: {err_msg}"
-                                )
-                                st.rerun()
-                        except Exception:
-                            st.error(f"오류 발생: {err_msg}")
+                            st.rerun()
+                    except Exception:
+                        st.error(f"오류 발생: {err_msg}")
 
     # 이전 답변 목록 (공통)
     if history:
