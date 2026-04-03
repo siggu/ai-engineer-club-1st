@@ -1,3 +1,5 @@
+import csv
+import io
 import json
 import os
 import threading
@@ -33,6 +35,7 @@ for key, default in {
     "jd_summary": {},  # 면접 중 사이드바에 표시할 JD 요약
     "jd_raw": "",  # 추출된 JD 원문 (파싱 실패 시 fallback)
     "last_eval": None,  # 직전 채점 결과 (score, feedback, model_answer)
+    "question_start_time": None,  # 현재 질문 시작 시각 (타이머용)
 }.items():
     if key not in st.session_state:
         st.session_state[key] = default
@@ -64,6 +67,37 @@ def api_get_session_status(session_id: str) -> dict:
         resp = client.get(f"{API_URL}/sessions/{session_id}/status")
     resp.raise_for_status()
     return resp.json()
+
+
+def _build_csv(sessions: list[dict]) -> str:
+    """세션 목록(각 세션에 session_history 포함)을 CSV 문자열로 변환한다."""
+    buf = io.StringIO()
+    writer = csv.writer(buf)
+    writer.writerow([
+        "날짜", "채용공고", "평균점수",
+        "문항번호", "유형", "난이도",
+        "질문", "내 답변", "점수", "피드백", "모범답안", "취약영역",
+    ])
+    for sess in sessions:
+        created  = (sess.get("created_at") or "")[:10]
+        snippet  = sess.get("jd_snippet") or ""
+        avg      = sess.get("average_score", "")
+        for rec in sess.get("session_history", []):
+            writer.writerow([
+                created,
+                snippet,
+                avg,
+                f"Q{rec.get('q_number', '')}",
+                rec.get("type", ""),
+                rec.get("difficulty", ""),
+                rec.get("question", ""),
+                rec.get("answer", ""),
+                rec.get("score", ""),
+                rec.get("feedback", ""),
+                rec.get("model_answer", ""),
+                rec.get("weak_category", ""),
+            ])
+    return buf.getvalue()
 
 
 def api_get_sessions() -> list[dict]:
@@ -454,6 +488,15 @@ if st.session_state.stage == "setup":
                 horizontal=True,
             )
 
+            _timer_options = {"없음": 0, "1분": 60, "2분": 120, "3분": 180, "5분": 300}
+            _timer_label = st.select_slider(
+                "질문당 시간 제한",
+                options=list(_timer_options.keys()),
+                value="없음",
+                help="시간이 초과되면 현재 입력된 내용으로 자동 제출됩니다.",
+            )
+            time_limit_seconds = _timer_options[_timer_label]
+
             submitted = st.form_submit_button(
                 "면접 시작하기 →",
                 type="primary",
@@ -480,6 +523,7 @@ if st.session_state.stage == "setup":
                 "difficulty": difficulty,
                 "llm_provider": llm_provider,
                 "llm_model": llm_model,
+                "time_limit_seconds": time_limit_seconds,
             }
             st.session_state.interview_config = interview_config
 
@@ -737,21 +781,42 @@ if st.session_state.stage == "setup":
                     wc = sess.get("weak_categories", [])
                     if wc:
                         st.warning(f"**취약 영역:** {', '.join(wc)}")
-                    if st.button(
-                        "상세 결과 보기",
-                        key=f"view_{sess['session_id']}",
-                        use_container_width=True,
-                    ):
+                    btn_col1, btn_col2 = st.columns(2)
+                    with btn_col1:
+                        if st.button(
+                            "상세 결과 보기",
+                            key=f"view_{sess['session_id']}",
+                            use_container_width=True,
+                        ):
+                            try:
+                                status = api_get_session_status(sess["session_id"])
+                                if status.get("status") == "complete":
+                                    st.session_state.report = status["report"]
+                                    st.session_state.stage = "complete"
+                                    st.rerun()
+                                else:
+                                    st.info("아직 완료되지 않은 세션입니다.")
+                            except Exception as e:
+                                st.error(f"세션을 불러오는 중 오류가 발생했습니다: {e}")
+                    with btn_col2:
                         try:
-                            status = api_get_session_status(sess["session_id"])
-                            if status.get("status") == "complete":
-                                st.session_state.report = status["report"]
-                                st.session_state.stage = "complete"
-                                st.rerun()
-                            else:
-                                st.info("아직 완료되지 않은 세션입니다.")
-                        except Exception as e:
-                            st.error(f"세션을 불러오는 중 오류가 발생했습니다: {e}")
+                            _hist_status = api_get_session_status(sess["session_id"])
+                            _hist_sess = [{
+                                "created_at":      sess.get("created_at", ""),
+                                "jd_snippet":      sess.get("jd_snippet", ""),
+                                "average_score":   sess.get("average_score", ""),
+                                "session_history": _hist_status.get("report", {}).get("session_history", []),
+                            }]
+                            st.download_button(
+                                label="CSV 다운로드",
+                                data=_build_csv(_hist_sess),
+                                file_name=f"history_{sess['session_id'][:8]}.csv",
+                                mime="text/csv",
+                                key=f"csv_{sess['session_id']}",
+                                use_container_width=True,
+                            )
+                        except Exception:
+                            st.caption("CSV 준비 실패")
 
 
 # ── 2단계: 면접 진행 ─────────────────────────────────────────────────
@@ -848,6 +913,23 @@ elif st.session_state.stage == "interview":
             st.success(f"**✅ 모범답안**\n\n{ev.get('model_answer', '')}")
         st.session_state.last_eval = None
 
+    # ── 타이머: 질문 시작 시각 기록 + 경과 시간 계산 ────────────────────
+    _time_limit = st.session_state.interview_config.get("time_limit_seconds", 0)
+    if _time_limit > 0:
+        if st.session_state.question_start_time is None:
+            st.session_state.question_start_time = time.time()
+        _elapsed = int(time.time() - st.session_state.question_start_time)
+        _remaining = max(_time_limit - _elapsed, 0)
+        _timer_color = "#b91c1c" if _remaining <= 30 else ("#92400e" if _remaining <= 60 else "#15803d")
+        st.markdown(
+            f"<p style='text-align:right;font-size:13px;color:{_timer_color};font-weight:700'>"
+            f"⏱ 남은 시간: {_remaining // 60:02d}:{_remaining % 60:02d}</p>",
+            unsafe_allow_html=True,
+        )
+        _time_expired = _remaining == 0
+    else:
+        _time_expired = False
+
     # ── free_order 모드 ──────────────────────────────────────────────
     if q.get("mode") == "free_order":
         answered_count = q.get("answered_count", 0)
@@ -914,9 +996,14 @@ elif st.session_state.stage == "interview":
                 key=answer_key,
             )
 
-            if st.button("답변 제출 →", type="primary", use_container_width=True):
+            _fo_submit = st.button("답변 제출 →", type="primary", use_container_width=True)
+            if _time_expired and not _fo_submit:
+                st.warning("⏱ 시간이 초과되었습니다. 현재 입력된 내용으로 자동 제출합니다.")
+                _fo_submit = True
+
+            if _fo_submit:
                 answer_val = st.session_state.get(answer_key, "").strip()
-                if not answer_val:
+                if not answer_val and not _time_expired:
                     st.warning("답변을 입력해주세요.")
                 else:
                     st.session_state.history.append(
@@ -957,6 +1044,7 @@ elif st.session_state.stage == "interview":
                                 final_event = event
 
                         status_ph.empty()
+                        st.session_state.question_start_time = None  # 타이머 초기화
                         if final_event and final_event["type"] == "in_progress":
                             st.session_state.current_question = final_event["question"]
                             st.rerun()
@@ -1014,8 +1102,13 @@ elif st.session_state.stage == "interview":
                 use_container_width=True,
             )
 
+        if _time_expired and not submitted:
+            st.warning("⏱ 시간이 초과되었습니다. 현재 입력된 내용으로 자동 제출합니다.")
+            submitted = True
+            answer = ""  # 입력 없으면 빈 문자열로 제출
+
         if submitted:
-            if not answer.strip():
+            if not answer.strip() and not _time_expired:
                 st.warning("답변을 입력해주세요.")
             else:
                 st.session_state.history.append(
@@ -1050,6 +1143,7 @@ elif st.session_state.stage == "interview":
                             final_event = event
 
                     status_ph.empty()
+                    st.session_state.question_start_time = None  # 타이머 초기화
                     if final_event and final_event["type"] == "in_progress":
                         st.session_state.current_question = final_event["question"]
                         st.rerun()
@@ -1159,13 +1253,29 @@ elif st.session_state.stage == "complete":
             lines.append("---\n")
         return "\n".join(lines)
 
-    st.download_button(
-        label="결과 리포트 다운로드 (.md)",
-        data=_build_report_md(report),
-        file_name="interview_report.md",
-        mime="text/markdown",
-        use_container_width=True,
-    )
+    dl_col1, dl_col2 = st.columns(2)
+    with dl_col1:
+        st.download_button(
+            label="결과 리포트 다운로드 (.md)",
+            data=_build_report_md(report),
+            file_name="interview_report.md",
+            mime="text/markdown",
+            use_container_width=True,
+        )
+    with dl_col2:
+        _csv_sess = [{
+            "created_at":      "",
+            "jd_snippet":      "",
+            "average_score":   report.get("average_score", ""),
+            "session_history": report.get("session_history", []),
+        }]
+        st.download_button(
+            label="답변 히스토리 다운로드 (.csv)",
+            data=_build_csv(_csv_sess),
+            file_name="interview_history.csv",
+            mime="text/csv",
+            use_container_width=True,
+        )
 
     if st.button("새 면접 시작하기", type="primary", use_container_width=True):
         for key in [
