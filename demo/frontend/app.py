@@ -547,12 +547,12 @@ if st.session_state.stage == "setup":
             """
             <div style="text-align:center;padding:56px 0 40px 0">
                 <p style="font-size:56px;margin:0">🎯</p>
-                <h1 style="font-size:36px;font-weight:800;margin:12px 0 8px 0;color:#111827">
+                <h1 style="font-size:36px;font-weight:800;margin:12px 0 8px 0;color:inherit">
                     꼬리에 꼬리를 무는 면접
                 </h1>
-                <p style="color:#6b7280;font-size:16px;margin:0;line-height:1.6">
+                <p style="color:inherit;opacity:0.65;font-size:16px;margin:0;line-height:1.6">
                     채용공고 × 자기소개서 × 포트폴리오를 AI가 교차 분석해<br>
-                    <strong>당신에게 꼭 맞는 기술면접</strong>을 실시간으로 진행합니다
+                    <strong style="opacity:1">당신에게 꼭 맞는 기술면접</strong>을 실시간으로 진행합니다
                 </p>
             </div>
             """,
@@ -561,7 +561,7 @@ if st.session_state.stage == "setup":
 
         # 핵심 기능 카드 (2×2)
         st.markdown(
-            "<p style='font-size:11px;font-weight:700;color:#9ca3af;letter-spacing:1.5px;"
+            "<p style='font-size:11px;font-weight:700;color:inherit;opacity:0.45;letter-spacing:1.5px;"
             "text-align:center;text-transform:uppercase;margin-bottom:20px'>핵심 기능</p>",
             unsafe_allow_html=True,
         )
@@ -606,10 +606,11 @@ if st.session_state.stage == "setup":
         for col, icon, title, desc, bg, fg in _FEATURES:
             col.markdown(
                 f"""
-                <div style="background:{bg};border-radius:12px;padding:22px 24px;height:100%;margin-bottom:12px">
+                <div style="background:var(--secondary-background-color);border-left:4px solid {fg};
+                            border-radius:12px;padding:22px 24px;height:100%;margin-bottom:12px">
                     <div style="font-size:28px;margin-bottom:10px">{icon}</div>
                     <div style="font-size:15px;font-weight:700;color:{fg};margin-bottom:8px">{title}</div>
-                    <div style="font-size:13px;color:#374151;line-height:1.6">{desc}</div>
+                    <div style="font-size:13px;color:inherit;opacity:0.75;line-height:1.6">{desc}</div>
                 </div>
                 """,
                 unsafe_allow_html=True,
@@ -619,7 +620,7 @@ if st.session_state.stage == "setup":
 
         # 사용 흐름 (3단계)
         st.markdown(
-            "<p style='font-size:11px;font-weight:700;color:#9ca3af;letter-spacing:1.5px;"
+            "<p style='font-size:11px;font-weight:700;color:inherit;opacity:0.45;letter-spacing:1.5px;"
             "text-align:center;text-transform:uppercase;margin-bottom:20px'>사용 방법</p>",
             unsafe_allow_html=True,
         )
@@ -647,13 +648,13 @@ if st.session_state.stage == "setup":
         for col, num, title, desc in _STEPS:
             col.markdown(
                 f"""
-                <div style="text-align:center;padding:24px 20px;border:1px solid #e5e7eb;
-                            border-radius:12px;background:#f9fafb;height:100%">
-                    <div style="width:36px;height:36px;border-radius:50%;background:#111827;
-                                color:#fff;font-size:16px;font-weight:800;line-height:36px;
+                <div style="text-align:center;padding:24px 20px;border:1px solid rgba(128,128,128,0.25);
+                            border-radius:12px;background:var(--secondary-background-color);height:100%">
+                    <div style="width:36px;height:36px;border-radius:50%;background:var(--text-color);
+                                color:var(--background-color);font-size:16px;font-weight:800;line-height:36px;
                                 margin:0 auto 14px auto">{num}</div>
-                    <div style="font-size:15px;font-weight:700;color:#111827;margin-bottom:8px">{title}</div>
-                    <div style="font-size:13px;color:#6b7280;line-height:1.6">{desc}</div>
+                    <div style="font-size:15px;font-weight:700;color:inherit;margin-bottom:8px">{title}</div>
+                    <div style="font-size:13px;color:inherit;opacity:0.65;line-height:1.6">{desc}</div>
                 </div>
                 """,
                 unsafe_allow_html=True,
