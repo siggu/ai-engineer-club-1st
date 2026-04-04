@@ -1,7 +1,9 @@
 import json
 import re
 import shutil
+import sqlite3
 import uuid
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
@@ -9,7 +11,7 @@ import httpx
 from bs4 import BeautifulSoup
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 from langgraph.types import Command
 from pydantic import BaseModel
 
@@ -27,6 +29,32 @@ app.add_middleware(
 
 UPLOAD_DIR  = Path("data/uploads")
 LIBRARY_DIR = Path("data/library")
+RESULTS_DB  = Path("data/sessions.db")
+
+
+def _results_conn() -> sqlite3.Connection:
+    conn = sqlite3.connect(RESULTS_DB)
+    conn.row_factory = sqlite3.Row
+    return conn
+
+
+def _init_results_table() -> None:
+    RESULTS_DB.parent.mkdir(parents=True, exist_ok=True)
+    with _results_conn() as conn:
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS results (
+                thread_id      TEXT PRIMARY KEY,
+                user_id        TEXT NOT NULL DEFAULT '',
+                jd_snippet     TEXT NOT NULL DEFAULT '',
+                created_at     TEXT NOT NULL DEFAULT '',
+                average_score  REAL,
+                answered_count INTEGER,
+                weak_categories TEXT NOT NULL DEFAULT '[]'
+            )
+        """)
+
+
+_init_results_table()
 
 
 def _save_upload(file: Optional[UploadFile], dest: Path) -> Optional[str]:
@@ -240,22 +268,26 @@ def _get_interrupt(config: dict) -> Optional[dict]:
 # ── 라이브러리 엔드포인트 ─────────────────────────────────────────────
 
 @app.get("/library")
-def list_library():
-    """타입별 라이브러리 파일 목록을 반환한다."""
+def list_library(user_id: str = ""):
+    """유저별 타입별 라이브러리 파일 목록을 반환한다."""
     result: dict[str, list[str]] = {"jd": [], "resume": [], "portfolio": []}
+    if not user_id:
+        return result
     for doc_type in result:
-        subdir = LIBRARY_DIR / doc_type
+        subdir = LIBRARY_DIR / user_id / doc_type
         if subdir.exists():
             result[doc_type] = sorted(f.name for f in subdir.iterdir() if f.is_file())
     return result
 
 
 @app.delete("/library/{doc_type}/{filename}")
-def delete_library_file(doc_type: str, filename: str):
-    """라이브러리 파일을 삭제한다."""
+def delete_library_file(doc_type: str, filename: str, user_id: str = ""):
+    """유저별 라이브러리 파일을 삭제한다."""
     if doc_type not in _VALID_DOC_TYPES:
         raise HTTPException(400, "잘못된 문서 유형입니다.")
-    path = LIBRARY_DIR / doc_type / filename
+    if not user_id:
+        raise HTTPException(400, "user_id가 필요합니다.")
+    path = LIBRARY_DIR / user_id / doc_type / filename
     if not path.exists():
         raise HTTPException(404, "파일을 찾을 수 없습니다.")
     path.unlink()
@@ -284,9 +316,13 @@ def start_session(
     resume_library: Optional[str] = Form(None),
     portfolio_library: Optional[str] = Form(None),
     interview_config: str = Form("{}"),
+    user_id: Optional[str] = Form(None),
 ):
     session_id = str(uuid.uuid4())
     base = UPLOAD_DIR / session_id
+
+    def _user_lib(doc_type: str) -> Path:
+        return LIBRARY_DIR / (user_id or "_global") / doc_type
 
     def _resolve(
         upload: Optional[UploadFile],
@@ -298,7 +334,10 @@ def start_session(
     ) -> Optional[str]:
         """우선순위: 파일 업로드 > URL > 직접 텍스트 > 라이브러리"""
         if upload and upload.filename:
-            _save_to_library(upload, doc_type)
+            lib_dest = _user_lib(doc_type) / upload.filename
+            lib_dest.parent.mkdir(parents=True, exist_ok=True)
+            lib_dest.write_bytes(upload.file.read())
+            upload.file.seek(0)
             return _save_upload(upload, dest)
         if url and url.strip():
             return _fetch_url_text(url.strip(), dest)
@@ -308,7 +347,7 @@ def start_session(
             path.write_text(raw_text.strip(), encoding="utf-8")
             return str(path)
         if library_name:
-            lib_path = LIBRARY_DIR / doc_type / library_name
+            lib_path = _user_lib(doc_type) / library_name
             if lib_path.exists():
                 dest.parent.mkdir(parents=True, exist_ok=True)
                 target = dest.with_suffix(lib_path.suffix)
@@ -331,13 +370,18 @@ def start_session(
         config_dict = {}
 
     config = {"configurable": {"thread_id": session_id}}
-    graph.invoke(
-        {
-            "selected_files":   selected_files,
-            "interview_config": config_dict,
-        },
-        config=config,
-    )
+    try:
+        graph.invoke(
+            {
+                "selected_files":   selected_files,
+                "interview_config": config_dict,
+            },
+            config=config,
+        )
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(500, f"그래프 실행 오류: {type(e).__name__}: {e}")
 
     question = _get_interrupt(config)
     if question is None:
@@ -346,6 +390,14 @@ def start_session(
     state_values = graph.get_state(config).values
     jd_summary = state_values.get("jd_parsed", {})
     jd_raw     = state_values.get("jd_raw", "")
+
+    jd_snippet = (jd_raw or "").strip().replace("\n", " ")[:60]
+    with _results_conn() as conn:
+        conn.execute(
+            "INSERT OR IGNORE INTO results (thread_id, user_id, jd_snippet, created_at) VALUES (?, ?, ?, ?)",
+            (session_id, user_id or "", jd_snippet, datetime.now(timezone.utc).isoformat()),
+        )
+
     return {
         "session_id": session_id,
         "status": "in_progress",
@@ -382,15 +434,25 @@ def submit_answer(session_id: str, body: AnswerRequest):
     if not state:
         raise HTTPException(500, "세션 상태를 확인할 수 없습니다.")
 
-    score_history = state.get("score_history", [])
-    avg = sum(score_history) / len(score_history) if score_history else 0.0
+    score_history    = state.get("score_history", [])
+    avg              = sum(score_history) / len(score_history) if score_history else 0.0
+    weak_categories  = list(set(state.get("weak_categories", [])))
+    answered_count   = state.get("answered_count", len(score_history))
+
+    with _results_conn() as conn:
+        conn.execute(
+            """UPDATE results
+               SET average_score = ?, answered_count = ?, weak_categories = ?
+               WHERE thread_id = ?""",
+            (round(avg, 1), answered_count, json.dumps(weak_categories, ensure_ascii=False), session_id),
+        )
 
     return {
         "status": "complete",
         "report": {
             "session_history": state.get("session_history", []),
             "score_history":   score_history,
-            "weak_categories": list(set(state.get("weak_categories", []))),
+            "weak_categories": weak_categories,
             "average_score":   round(avg, 1),
         },
     }
@@ -420,6 +482,103 @@ def get_session_status(session_id: str):
             "average_score":   round(avg, 1),
         },
     }
+
+
+@app.post("/sessions/{session_id}/answer/stream")
+def stream_answer(session_id: str, body: AnswerRequest):
+    """답변을 제출하고 채점 결과를 SSE로 스트리밍한다."""
+    config = {"configurable": {"thread_id": session_id}}
+
+    snapshot = graph.get_state(config)
+    if not snapshot.values:
+        raise HTTPException(404, "세션을 찾을 수 없습니다.")
+
+    if body.selected_index is not None:
+        resume_value = {"selected_index": body.selected_index, "answer": body.answer}
+    else:
+        resume_value = body.answer
+
+    def _generate():
+        try:
+            for chunk in graph.stream(
+                Command(resume=resume_value), config=config, stream_mode="updates"
+            ):
+                for node_name, node_output in chunk.items():
+                    if node_name == "evaluator":
+                        session_history = node_output.get("session_history", [])
+                        if session_history:
+                            last = session_history[-1]
+                            event = {
+                                "type": "eval",
+                                "score":        last.get("score", 0),
+                                "feedback":     last.get("feedback", ""),
+                                "model_answer": last.get("model_answer", ""),
+                            }
+                            yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
+        except Exception:
+            pass
+
+        # 그래프 완료 후 최종 상태 전송
+        question = _get_interrupt(config)
+        if question is not None:
+            event = {"type": "in_progress", "question": question}
+            yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
+        else:
+            state = graph.get_state(config).values
+            if state:
+                score_history   = state.get("score_history", [])
+                avg             = sum(score_history) / len(score_history) if score_history else 0.0
+                weak_categories = list(set(state.get("weak_categories", [])))
+                answered_count  = state.get("answered_count", len(score_history))
+
+                with _results_conn() as conn:
+                    conn.execute(
+                        """UPDATE results
+                           SET average_score = ?, answered_count = ?, weak_categories = ?
+                           WHERE thread_id = ?""",
+                        (round(avg, 1), answered_count,
+                         json.dumps(weak_categories, ensure_ascii=False), session_id),
+                    )
+
+                report = {
+                    "session_history": state.get("session_history", []),
+                    "score_history":   score_history,
+                    "weak_categories": weak_categories,
+                    "average_score":   round(avg, 1),
+                }
+                event = {"type": "complete", "report": report}
+                yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
+
+    return StreamingResponse(
+        _generate(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
+@app.get("/sessions")
+def list_sessions(user_id: str = ""):
+    """유저별 면접 세션 목록을 최신순으로 반환한다."""
+    with _results_conn() as conn:
+        rows = conn.execute(
+            """SELECT thread_id, jd_snippet, created_at, average_score, answered_count, weak_categories
+               FROM results
+               WHERE user_id = ?
+               ORDER BY created_at DESC
+               LIMIT 20""",
+            (user_id,),
+        ).fetchall()
+    return [
+        {
+            "session_id":     row["thread_id"],
+            "jd_snippet":     row["jd_snippet"],
+            "created_at":     row["created_at"],
+            "average_score":  row["average_score"],
+            "answered_count": row["answered_count"],
+            "weak_categories": json.loads(row["weak_categories"] or "[]"),
+        }
+        for row in rows
+    ]
 
 
 @app.get("/health")

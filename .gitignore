@@ -1,5 +1,6 @@
 .env
 uv.lock
+!demo/uv.lock
 .streamlit
 assignment.md
 CLAUDE.md

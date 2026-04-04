@@ -1,0 +1,17 @@
+FROM python:3.13-slim
+
+WORKDIR /app
+
+RUN pip install uv
+
+COPY demo/pyproject.toml demo/uv.lock ./
+
+RUN uv sync --frozen --no-dev
+
+COPY demo/ .
+
+RUN mkdir -p data
+
+EXPOSE 8501
+
+CMD ["/app/.venv/bin/python", "/app/start_frontend.py"]
